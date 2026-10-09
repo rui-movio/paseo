@@ -402,6 +402,104 @@ describe("ClaudeAgentClient.fetchCatalog", () => {
     });
   });
 
+  it("adds Claude Code modelPicker options with their labels", async () => {
+    const configDir = await createClaudeConfigDir({
+      model: "gateway/opus[1m]",
+      modelPicker: {
+        options: [
+          {
+            model: "gateway/opus[1m]",
+            label: "Gateway Opus",
+            description: "Opus through the gateway",
+            behavesAs: "claude-opus-5",
+          },
+          { model: "gateway/kimi", behavesAs: "not-a-claude-model" },
+          { model: " " },
+          "gateway/ignored",
+        ],
+      },
+    });
+    vi.stubEnv("CLAUDE_CONFIG_DIR", configDir);
+    const client = createCatalogClient();
+
+    const { models } = await client.fetchCatalog({
+      scope: "workspace",
+      cwd: os.tmpdir(),
+      force: true,
+    });
+
+    const opus5 = getClaudeModels().find((model) => model.id === "claude-opus-5");
+    expect(models).toEqual([
+      ...getClaudeModels(),
+      {
+        provider: "claude",
+        id: "gateway/opus[1m]",
+        label: "Gateway Opus",
+        description: "Opus through the gateway",
+        thinkingOptions: opus5?.thinkingOptions,
+        defaultThinkingOptionId: opus5?.defaultThinkingOptionId,
+      },
+      {
+        provider: "claude",
+        id: "gateway/kimi",
+        label: "gateway/kimi",
+        description: "From Claude settings.json modelPicker",
+      },
+    ]);
+  });
+
+  it("hides built-in models when modelPicker replaces them", async () => {
+    const configDir = await createClaudeConfigDir({
+      model: "gateway/sonnet",
+      modelPicker: {
+        replaceBuiltInOptions: true,
+        options: [
+          { model: "gateway/opus", label: "Gateway Opus" },
+          { model: "gateway/sonnet", label: "Gateway Sonnet" },
+          { model: "claude-fable-5[1m]", label: "Fable 5" },
+        ],
+      },
+    });
+    vi.stubEnv("CLAUDE_CONFIG_DIR", configDir);
+    const client = createCatalogClient();
+
+    const { models } = await client.fetchCatalog({
+      scope: "workspace",
+      cwd: os.tmpdir(),
+      force: true,
+    });
+
+    const selectable = models.filter((model) => model.isSelectable !== false);
+    expect(selectable.map((model) => model.id)).toEqual([
+      "claude-fable-5[1m]",
+      "gateway/opus",
+      "gateway/sonnet",
+    ]);
+    expect(models.filter((model) => model.isDefault).map((model) => model.id)).toEqual([
+      "gateway/sonnet",
+    ]);
+    // Built-in entries stay resolvable for agents that already use them.
+    expect(models.find((model) => model.id === "claude-opus-5")).toMatchObject({
+      isSelectable: false,
+    });
+  });
+
+  it("keeps built-in models when replaceBuiltInOptions has no usable options", async () => {
+    const configDir = await createClaudeConfigDir({
+      modelPicker: { replaceBuiltInOptions: true, options: [{ model: "" }] },
+    });
+    vi.stubEnv("CLAUDE_CONFIG_DIR", configDir);
+    const client = createCatalogClient();
+
+    const { models } = await client.fetchCatalog({
+      scope: "workspace",
+      cwd: os.tmpdir(),
+      force: true,
+    });
+
+    expect(models).toEqual(getClaudeModels());
+  });
+
   it("omits models that require a newer Claude Code version", async () => {
     const client = createCatalogClient("2.1.218");
 
