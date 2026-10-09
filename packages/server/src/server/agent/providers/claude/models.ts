@@ -54,14 +54,22 @@ export async function getClaudeModelsWithSettings(
   claudeCodeVersion?: string,
 ): Promise<AgentModelDefinition[]> {
   const hardcodedModels = getClaudeModels(claudeCodeVersion);
-  const settingsModels = await readClaudeSettingsModels(logger, configDir);
-  if (settingsModels.length === 0) {
+  const settings = await readClaudeSettingsModels(logger, configDir);
+  if (settings.models.length === 0) {
     return hardcodedModels;
   }
 
-  const models = [...hardcodedModels];
+  // Claude Code hides its built-in /model entries when modelPicker.replaceBuiltInOptions is set,
+  // typically because the configured gateway cannot serve them. Keep the entries resolvable for
+  // agents that already use them, but stop offering them or defaulting to them.
+  const models: AgentModelDefinition[] = settings.replaceBuiltInOptions
+    ? hardcodedModels.map(({ isDefault: _isDefault, ...model }) => ({
+        ...model,
+        isSelectable: false,
+      }))
+    : [...hardcodedModels];
 
-  for (const model of settingsModels) {
+  for (const model of settings.models) {
     const existingIndex = models.findIndex((candidate) => candidate.id === model.id);
     if (existingIndex !== -1) {
       const existing = models[existingIndex];
@@ -73,14 +81,30 @@ export async function getClaudeModelsWithSettings(
     models.push(model);
   }
 
+  if (settings.replaceBuiltInOptions) {
+    const defaultModel =
+      models.find((model) => model.id === settings.model && model.isSelectable !== false) ??
+      models.find((model) => model.isSelectable !== false);
+    if (defaultModel) {
+      defaultModel.isDefault = true;
+    }
+  }
+
   return models;
+}
+
+interface ClaudeSettingsModels {
+  models: AgentModelDefinition[];
+  model?: string;
+  replaceBuiltInOptions: boolean;
 }
 
 async function readClaudeSettingsModels(
   logger: Logger,
   configDir: string,
-): Promise<AgentModelDefinition[]> {
+): Promise<ClaudeSettingsModels> {
   const settingsPath = path.join(configDir, "settings.json");
+  const empty: ClaudeSettingsModels = { models: [], replaceBuiltInOptions: false };
 
   let parsed: unknown;
   try {
@@ -88,31 +112,84 @@ async function readClaudeSettingsModels(
     parsed = JSON.parse(rawSettings);
   } catch (error) {
     logger.debug({ err: error, settingsPath }, "Failed to read Claude settings models");
-    return [];
+    return empty;
   }
 
   if (!isRecord(parsed)) {
     logger.debug({ settingsPath }, "Claude settings.json is not an object");
-    return [];
+    return empty;
   }
 
   const models: AgentModelDefinition[] = [];
+  // Picker options come first so their labels win over the bare IDs below.
+  const pickerOptionCount = addModelPickerModels(models, parsed.modelPicker);
   addSettingsModel(models, parsed.model, "model");
+  const result: ClaudeSettingsModels = {
+    models,
+    replaceBuiltInOptions:
+      pickerOptionCount > 0 &&
+      isRecord(parsed.modelPicker) &&
+      parsed.modelPicker.replaceBuiltInOptions === true,
+  };
+  if (typeof parsed.model === "string" && parsed.model.trim().length > 0) {
+    result.model = parsed.model.trim();
+  }
 
   const env = parsed.env;
   if (env === undefined) {
-    return models;
+    return result;
   }
   if (!isRecord(env)) {
     logger.debug({ settingsPath }, "Claude settings.json env is not an object");
-    return models;
+    return result;
   }
 
   for (const envKey of CLAUDE_SETTINGS_MODEL_ENV_KEYS) {
     addSettingsModel(models, env[envKey], `env.${envKey}`);
   }
 
-  return models;
+  return result;
+}
+
+/**
+ * Read Claude Code's `modelPicker` setting: the custom /model entries a gateway or wrapper
+ * (for example hg-connect) configures. Returns how many entries were added.
+ */
+function addModelPickerModels(models: AgentModelDefinition[], modelPicker: unknown): number {
+  if (!isRecord(modelPicker) || !Array.isArray(modelPicker.options)) {
+    return 0;
+  }
+
+  let added = 0;
+  for (const option of modelPicker.options) {
+    if (!isRecord(option)) continue;
+    const id = readTrimmedString(option.model);
+    if (!id || models.some((model) => model.id === id)) continue;
+
+    const model: AgentModelDefinition = {
+      provider: "claude",
+      id,
+      label: readTrimmedString(option.label) ?? id,
+      description: readTrimmedString(option.description) ?? "From Claude settings.json modelPicker",
+    };
+    // behavesAs tells Claude Code which built-in model's capabilities to assume.
+    const behavesAs = findClaudeModel(readTrimmedString(option.behavesAs));
+    if (behavesAs?.thinkingOptions) {
+      model.thinkingOptions = behavesAs.thinkingOptions;
+      if (behavesAs.defaultThinkingOptionId !== undefined) {
+        model.defaultThinkingOptionId = behavesAs.defaultThinkingOptionId;
+      }
+    }
+    models.push(model);
+    added += 1;
+  }
+  return added;
+}
+
+function readTrimmedString(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
 }
 
 function addSettingsModel(
