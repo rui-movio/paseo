@@ -5,6 +5,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import type { PluginServerContext, PluginHandlerContext } from "@getpaseo/plugin/server";
 import { z } from "zod";
 import { EmployeeRooms } from "./server/rooms.js";
+import { registerTasks } from "./server/tasks.js";
 import {
   stateRpc,
   openRpc,
@@ -12,10 +13,12 @@ import {
   readRpc,
   endRpc,
   resumeRpc,
+  targetsRpc,
   type Scope,
 } from "./shared/rooms.js";
 
 export default function contribute(server: PluginServerContext) {
+  const disposeTasks = registerTasks(server);
   const contexts = new Map<string, EmployeeRooms>();
   const capabilities = new Map<string, EmployeeRooms>();
   let listener: http.Server | null = null;
@@ -38,8 +41,11 @@ export default function contribute(server: PluginServerContext) {
   }
   server.handle(stateRpc, async (input, { paseo }) => (await roomsFor(input, paseo)).state());
   server.handle(openRpc, async (input, { paseo }) =>
-    (await roomsFor(input, paseo)).open(input.employee),
+    (await roomsFor(input, paseo)).open(input.employee, input.target),
   );
+  server.handle(targetsRpc, async (input, { paseo }) => ({
+    targets: await (await roomsFor(input, paseo)).targets(input.employee),
+  }));
   server.handle(sendRpc, async (input, { paseo }) => ({
     id: await (await roomsFor(input, paseo)).send(input.room, input.text, input.id),
   }));
@@ -187,6 +193,7 @@ export default function contribute(server: PluginServerContext) {
     }
   });
   return async () => {
+    disposeTasks();
     disposed = true;
     capabilities.clear();
     for (const rooms of contexts.values()) rooms.dispose();

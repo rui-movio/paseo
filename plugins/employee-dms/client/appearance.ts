@@ -20,7 +20,10 @@ export function avatarColor(name: string): string {
 }
 
 export function initials(name: string): string {
-  const words = name.trim().split(/\s+/);
+  const words = name
+    .trim()
+    .split(/[\s/]+/)
+    .filter(Boolean);
   if (words.length > 1) return `${words[0]![0]}${words[1]![0]}`.toUpperCase();
   const capitals = name.match(/[A-Z]/g);
   if (capitals && capitals.length > 1) return capitals.slice(0, 2).join("");

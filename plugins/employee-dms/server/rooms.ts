@@ -8,12 +8,15 @@ import {
   messageSchema,
   type ConversationState,
   type Message,
+  targetSummarySchema,
+  type Target,
 } from "../shared/rooms.js";
 
 const connectionSchema = z.object({
   baseUrl: z.string().url(),
   token: z.string().min(1),
   features: z.array(z.string()).optional(),
+  owner: z.string().optional(),
 });
 const historySchema = z.object({
   room: roomSchema,
@@ -52,6 +55,7 @@ export interface RoomsOptions {
   connect?: () => Promise<RoomConnection>;
   fetchImpl?: typeof fetch;
   now?: () => number;
+  owner?: string;
 }
 
 export class EmployeeRooms {
@@ -110,6 +114,8 @@ export class EmployeeRooms {
         this.invalidateConnection(connecting);
         throw error;
       }
+      if (this.options.owner && connectionSchema.parse(connection).owner !== this.options.owner)
+        throw new Error("The Genesis account changed. Refresh the inbox before continuing.");
       const signal = AbortSignal.any([this.abort.signal, AbortSignal.timeout(240000)]);
       let response: Response;
       try {
@@ -220,7 +226,22 @@ export class EmployeeRooms {
       conversations: [...this.cache.values()].map((entry) => structuredClone(entry.conversation)),
     };
   }
-  async open(employee: string) {
+  async account(): Promise<string> {
+    const result = await this.request(
+      "/account",
+      z.object({ owner: z.string().regex(/^[a-f0-9]{64}$/) }),
+    );
+    return result.owner;
+  }
+  async targets(employee: string) {
+    return (
+      await this.request(
+        `/employees/${encodeURIComponent(employee)}/targets`,
+        z.object({ targets: z.array(targetSummarySchema) }),
+      )
+    ).targets;
+  }
+  async open(employee: string, target?: Target) {
     const state = await this.state();
     const match = state.employees.find(
       (candidate) =>
@@ -230,12 +251,20 @@ export class EmployeeRooms {
     );
     if (!match) throw new Error("Choose an employee you can access.");
     const existing = state.conversations.find(
-      (room) => room.aiEmployeeId === match.ai_employee_id && !room.ended,
+      (room) =>
+        room.aiEmployeeId === match.ai_employee_id &&
+        !room.ended &&
+        room.target?.kind === target?.kind &&
+        room.target?.id === target?.id,
     );
     if (existing) return existing;
-    const ongoing = this.opening.get(match.ai_employee_id);
+    const targetKey = JSON.stringify([match.ai_employee_id, target?.kind, target?.id]);
+    const ongoing = this.opening.get(targetKey);
     if (ongoing) return ongoing;
-    const opening = this.request("/rooms", roomSchema, { employee: match.ai_employee_id })
+    const opening = this.request("/rooms", roomSchema, {
+      employee: match.ai_employee_id,
+      ...(target ? { target } : {}),
+    })
       .then((room) => {
         this.cache.set(room.room, {
           conversation: {
@@ -255,8 +284,8 @@ export class EmployeeRooms {
         });
         return room;
       })
-      .finally(() => this.opening.delete(match.ai_employee_id));
-    this.opening.set(match.ai_employee_id, opening);
+      .finally(() => this.opening.delete(targetKey));
+    this.opening.set(targetKey, opening);
     return opening;
   }
   private requireRoom(id: string): RoomCache {
@@ -409,8 +438,8 @@ export class EmployeeRooms {
       (candidate) =>
         !candidate.ended &&
         (candidate.room === employee ||
-          candidate.aiEmployeeId === employee ||
-          candidate.aiEmployeeId === employeeId ||
+          (!candidate.target && candidate.aiEmployeeId === employee) ||
+          (!candidate.target && candidate.aiEmployeeId === employeeId) ||
           candidate.name.toLowerCase() === employee.toLowerCase()),
     );
     if (!room) throw new Error("Choose an existing employee DM to resume.");
@@ -428,7 +457,7 @@ export class EmployeeRooms {
     const room = state.conversations.find(
       (candidate) =>
         candidate.room === employee ||
-        (!candidate.ended && candidate.aiEmployeeId === match?.ai_employee_id),
+        (!candidate.ended && !candidate.target && candidate.aiEmployeeId === match?.ai_employee_id),
     );
     if (!room)
       return "No open DM with that employee. Open it in Conversations or use ask_employee.";

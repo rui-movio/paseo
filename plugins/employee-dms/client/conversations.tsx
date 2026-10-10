@@ -29,7 +29,14 @@ interface ActionProps {
   iconOnly?: boolean;
   disabled?: boolean;
 }
-function Action({ colors, label, icon, onPress, iconOnly = false, disabled = false }: ActionProps) {
+export function Action({
+  colors,
+  label,
+  icon,
+  onPress,
+  iconOnly = false,
+  disabled = false,
+}: ActionProps) {
   const styles = useStyles(colors);
   const [hovered, setHovered] = useState(false);
   const enter = useCallback(() => setHovered(true), []);
@@ -60,7 +67,7 @@ interface AvatarProps {
   name: string;
   size?: number;
 }
-function Avatar({ colors, name, size = 24 }: AvatarProps) {
+export function Avatar({ colors, name, size = 24 }: AvatarProps) {
   const styles = useStyles(colors);
   const shape = useMemo(
     () => ({ width: size, height: size, backgroundColor: avatarColor(name) }),
@@ -412,6 +419,7 @@ export interface DetailProps {
   onForward: (text: string) => void;
   onAgent?: () => void;
   newId: () => string;
+  standalone?: boolean;
 }
 export function Detail(props: DetailProps) {
   const { room, colors } = props;
@@ -465,8 +473,9 @@ export function Detail(props: DetailProps) {
       <View style={styles.context}>
         <Icon name="Link" size={13} color={colors.foregroundMuted} />
         <Text style={styles.contextText} numberOfLines={2}>
-          Linked to {props.agentTitle ?? "your local agent"}. Forward a reply when you want to share
-          it.
+          {props.standalone
+            ? "Direct conversation · History is saved on this host"
+            : `Linked to ${props.agentTitle ?? "your local agent"}. Forward a reply when you want to share it.`}
         </Text>
       </View>
       {room.historyGap && (
