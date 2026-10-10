@@ -10,7 +10,13 @@ import {
 } from "./plugin-sdk-specifiers.js";
 
 const nodeRequire = createRequire(import.meta.url);
-export const SERVER_HOST_MODULES = [...PLUGIN_SDK_SPECIFIERS, "zod"];
+// Electron's compiler subprocess cannot read dependencies inside app.asar. These
+// MCP entry points use the daemon's installed SDK through its runtime require.
+const MCP_HOST_MODULES = [
+  "@modelcontextprotocol/sdk/server/mcp.js",
+  "@modelcontextprotocol/sdk/server/streamableHttp.js",
+];
+export const SERVER_HOST_MODULES = [...PLUGIN_SDK_SPECIFIERS, "zod", ...MCP_HOST_MODULES];
 const ESBUILD_BINARY_PATH = "ESBUILD_BINARY_PATH";
 
 // esbuild resolves its own platform binary via require.resolve() the first time its
@@ -248,6 +254,7 @@ function createRuntimeBoundaryPlugin(target: PluginBuildTarget, pluginDirectory:
           // Host modules have separately enforced SDK boundaries and need no local installation.
           if (
             (PLUGIN_SDK_SPECIFIERS as readonly string[]).includes(specifier) ||
+            (owner === "server" && MCP_HOST_MODULES.includes(specifier)) ||
             /^(zod|react|react-native|@tanstack\/react-query)(\/|$)/.test(specifier) ||
             isBuiltin(specifier) ||
             packageSpecifier === "@types/node"

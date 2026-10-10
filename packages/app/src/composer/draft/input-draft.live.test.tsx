@@ -6,6 +6,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { useDraftStore } from "@/stores/draft-store";
 import type { AttachmentMetadata, ComposerAttachment } from "@/attachments/types";
 import { createWorkspaceFileAttachment } from "@/attachments/workspace-file";
+import { appendToDraft } from "./programmatic-draft";
 
 const { asyncStorage } = vi.hoisted(() => ({
   asyncStorage: new Map<string, string>(),
@@ -29,6 +30,17 @@ vi.mock("@react-native-async-storage/async-storage", () => ({
 
 vi.mock("@/attachments/service", () => ({
   garbageCollectAttachments: async () => undefined,
+}));
+
+vi.mock("expo-router", () => ({ router: { push: vi.fn(), replace: vi.fn() } }));
+
+vi.mock("@/hooks/use-draft-agent-features", () => ({
+  useDraftAgentFeatures: () => ({
+    features: [],
+    featureValues: undefined,
+    setFeatureValue: vi.fn(),
+    applyProfileFeatureValues: vi.fn(),
+  }),
 }));
 
 vi.mock("@/hooks/use-agent-form-state", () => ({
@@ -224,6 +236,16 @@ describe("useAgentInputDraft live contract", () => {
 
     expect(getLatest().textReplacement).not.toBe(hydratedTextReplacement);
     expect(getLatest().textReplacement.text).toBe("replacement text");
+
+    await act(async () => {
+      getLatest().editText("Just typed context");
+      await appendToDraft("draft:setup", "Jerry said:\n> Deploy is ready");
+    });
+    expect(getLatest().textReplacement.text).toBe(
+      "Just typed context\n\nJerry said:\n> Deploy is ready\n\n",
+    );
+    expect(getLatest().textSource.getSnapshot()).toBe(getLatest().textReplacement.text);
+    expect(getLatest().attachments).toEqual([{ kind: "image", metadata: image }]);
 
     await act(async () => {
       getLatest().editText("hello world");

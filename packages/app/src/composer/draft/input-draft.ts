@@ -25,6 +25,7 @@ import { useDraftStore } from "@/stores/draft-store";
 import { AfterPaintPublication } from "@/composer/after-paint-publication";
 import { useShallow } from "zustand/shallow";
 import type { ComposerTextSource } from "@/composer/text-source";
+import { appendedDraftText, registerDraftAppender } from "./programmatic-draft";
 import { isWeb } from "@/constants/platform";
 
 type AttachmentUpdater =
@@ -175,6 +176,16 @@ export function useAgentInputDraft(input: UseAgentInputDraftInput): AgentInputDr
       publishTextReplacement(nextText);
     },
     [draftKey, publishTextReplacement, textPublication],
+  );
+
+  useEffect(
+    () =>
+      registerDraftAppender(draftKey, (text) => {
+        textPublication.flush();
+        const current = useDraftStore.getState().getDraftInput(draftKey)?.text ?? "";
+        replaceText(appendedDraftText(current, text));
+      }),
+    [draftKey, replaceText, textPublication],
   );
 
   const setAttachments = useCallback(

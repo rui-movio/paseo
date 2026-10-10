@@ -98,3 +98,63 @@ test("session-open hooks reject changes to session identity instead of silently 
     ),
   ).rejects.toThrow("agent.session_open hooks can only change env");
 });
+
+test.each(["create", "resume", "refresh", "import"] as const)(
+  "session-open hooks attach launch MCP servers on %s",
+  async (reason) => {
+    const hooks = new PluginHookHandlers(() => {});
+    hooks.before("agent.session_open", ({ request }) => ({
+      ...request,
+      mcpServers: {
+        employees: {
+          type: "http",
+          url: "http://127.0.0.1:1234/mcp",
+          headers: { Authorization: "Bearer scoped" },
+        },
+      },
+    }));
+    const input = {
+      agentId: "agent",
+      workspaceId: "workspace",
+      provider: "claude",
+      cwd: "/project",
+      reason,
+      purpose: "interactive" as const,
+      env: {},
+      internal: false,
+    };
+    const result = await hooks.invoke("operation", "before", "agent.session_open", input, paseo);
+    expect(result).toMatchObject({
+      mcpServers: { employees: { url: "http://127.0.0.1:1234/mcp" } },
+    });
+    expect(input).not.toHaveProperty("mcpServers");
+  },
+);
+
+test.each([
+  { purpose: "history", internal: false },
+  { purpose: "interactive", internal: true },
+] as const)("background opening %j cannot receive tools", async (flags) => {
+  const hooks = new PluginHookHandlers(() => {});
+  hooks.before("agent.session_open", ({ request }) => ({
+    ...request,
+    mcpServers: { employees: { type: "http", url: "http://127.0.0.1:1234/mcp" } },
+  }));
+  await expect(
+    hooks.invoke(
+      "operation",
+      "before",
+      "agent.session_open",
+      {
+        agentId: "agent",
+        workspaceId: "workspace",
+        provider: "claude",
+        cwd: "/project",
+        reason: "resume",
+        env: {},
+        ...flags,
+      },
+      paseo,
+    ),
+  ).rejects.toThrow("cannot add MCP servers");
+});

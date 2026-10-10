@@ -3009,6 +3009,75 @@ test("createAgent injects paseo MCP server only into provider launch config", as
   });
 });
 
+test("session-open MCP capabilities are refreshed at launch and never persisted in agent config", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-plugin-mcp-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const configs: Array<Partial<AgentSessionConfig>> = [];
+  class CaptureSession extends McpCapableTestAgentSession {
+    override describePersistence() {
+      return {
+        provider: this.config.provider,
+        sessionId: "native-session",
+        metadata: { ...this.config },
+      };
+    }
+  }
+  class CaptureClient extends TestAgentClient {
+    override async createSession(config: AgentSessionConfig): Promise<AgentSession> {
+      configs.push(config);
+      return new CaptureSession(config);
+    }
+    override async resumeSession(
+      _handle: AgentPersistenceHandle,
+      config?: Partial<AgentSessionConfig>,
+    ): Promise<AgentSession> {
+      configs.push(config ?? {});
+      return new CaptureSession({ ...config, provider: "codex", cwd: workdir });
+    }
+  }
+  let generation = 0;
+  const manager = new AgentManager({
+    clients: { codex: new CaptureClient() },
+    registry: storage,
+    logger,
+    pluginLifecycle: {
+      emit: () => {},
+      before: async (name, request) =>
+        name === "agent.session_open"
+          ? {
+              ...request,
+              mcpServers: {
+                employees: {
+                  type: "http",
+                  url: "http://127.0.0.1:1234/mcp",
+                  headers: { Authorization: `Bearer generation-${++generation}` },
+                },
+              },
+            }
+          : request,
+    },
+  });
+  try {
+    const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+      workspaceId: "workspace",
+    });
+    expect(configs[0].mcpServers).toMatchObject({
+      employees: { headers: { Authorization: "Bearer generation-1" } },
+    });
+    expect(agent.config.mcpServers).toBeUndefined();
+    expect(agent.persistence?.metadata?.mcpServers).toBeUndefined();
+    expect((await storage.get(agent.id))?.config?.mcpServers).toBeUndefined();
+    await manager.reloadAgentSession(agent.id, {});
+    expect(manager.getAgent(agent.id)?.persistence?.metadata?.mcpServers).toBeUndefined();
+    expect(configs[1].mcpServers).toMatchObject({
+      employees: { headers: { Authorization: "Bearer generation-2" } },
+    });
+    expect((await storage.get(agent.id))?.config?.mcpServers).toBeUndefined();
+  } finally {
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
 test("createAgent closes and rejects a provider session that cannot honor MCP servers", async () => {
   const workdir = mkdtempSync(join(tmpdir(), "agent-manager-test-"));
   const storage = new AgentStorage(join(workdir, "agents"), logger);

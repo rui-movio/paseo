@@ -1,4 +1,5 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import http from "node:http";
 import { fork } from "node:child_process";
 import { tmpdir } from "node:os";
 import { PassThrough } from "node:stream";
@@ -249,6 +250,143 @@ afterEach(async () => {
 });
 
 describe("PluginRuntime", () => {
+  it.each(["directory", "builtin"])(
+    "loads employee DMs and exposes scoped tools through the real MCP and %s loader",
+    async (loader) => {
+      const requests: string[] = [];
+      const bridge = http.createServer((request, response) => {
+        requests.push(request.method + " " + request.url);
+        response.setHeader("content-type", "application/json");
+        const pathname = new URL(request.url!, "http://127.0.0.1").pathname;
+        if (pathname.endsWith("/employees"))
+          response.end(
+            JSON.stringify({
+              ai_employees: [
+                {
+                  ai_employee_id: "emp-1",
+                  name: "Jerry",
+                  slug: "jerry",
+                  status: "running",
+                  engine: "jerry",
+                },
+              ],
+            }),
+          );
+        else if (pathname.endsWith("/rooms"))
+          response.end(
+            JSON.stringify({
+              rooms: [
+                {
+                  room: "r_test",
+                  aiEmployeeId: "emp-1",
+                  name: "Jerry",
+                  after: 0,
+                  createdAt: "2026-10-09T12:00:00Z",
+                  started: true,
+                },
+              ],
+            }),
+          );
+        else
+          response.end(
+            JSON.stringify({
+              events: [
+                { seq: 1, type: "post", text: "Retained update", at: "2026-10-09T12:01:00Z" },
+              ],
+            }),
+          );
+      });
+      await new Promise<void>((resolve) => bridge.listen(0, "127.0.0.1", resolve));
+      const address = bridge.address();
+      if (!address || typeof address === "string") throw new Error("No test bridge address");
+      const directory = await mkdtemp(path.join(tmpdir(), "employee-plugin-tools-"));
+      temporaryDirectories.push(directory);
+      const helper = path.join(directory, "hg-connect");
+      await writeFile(
+        helper,
+        `#!/bin/sh\nprintf '%s\\n' '{"baseUrl":"http://127.0.0.1:${address.port}","token":"test-session-capability"}'\n`,
+      );
+      await chmod(helper, 0o700);
+      vi.stubEnv("HG_CONNECT_BIN", helper);
+      const runtime = createTestRuntime({}, pino({ level: "silent" }), "0.11.1");
+      try {
+        if (loader === "builtin")
+          await runtime.startBuiltinPlugin({
+            id: "employee-dms",
+            directory: path.resolve("plugins/employee-dms"),
+          });
+        else await runtime.startPlugin("employee-dms", path.resolve("plugins/employee-dms"));
+        const input = {
+          agentId: "agent",
+          workspaceId: "workspace",
+          provider: "claude",
+          cwd: directory,
+          reason: "create" as const,
+          purpose: "interactive" as const,
+          internal: false,
+          env: {},
+        };
+        const opening = await runtime.before("agent.session_open", input);
+        const config = opening.mcpServers?.["paseo-employee-rooms"];
+        if (!config || config.type !== "http") throw new Error("Missing employee tools");
+        async function rpc(method: string, params: unknown) {
+          const response = await fetch(config!.url, {
+            method: "POST",
+            headers: {
+              ...config!.headers,
+              "content-type": "application/json",
+              accept: "application/json, text/event-stream",
+              "mcp-protocol-version": "2025-03-26",
+            },
+            body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+          });
+          expect(response.status).toBe(200);
+          return response.json();
+        }
+        const listed = await rpc("tools/list", {});
+        expect(listed.result.tools.map((tool: { name: string }) => tool.name)).toEqual([
+          "ask_employee",
+          "read_room",
+        ]);
+        const read = await rpc("tools/call", {
+          name: "read_room",
+          arguments: { employee: "Jerry" },
+        });
+        expect(read.result.content[0].text).toBe("Jerry: Retained update");
+        expect(requests.every((request) => request.startsWith("GET "))).toBe(true);
+        expect(
+          (
+            await fetch(config.url, {
+              method: "POST",
+              headers: { authorization: "Bearer wrong-session" },
+            })
+          ).status,
+        ).toBe(403);
+        const background = await runtime.before("agent.session_open", {
+          ...input,
+          agentId: "internal",
+          internal: true,
+        });
+        expect(background.mcpServers).toBeUndefined();
+        const refreshed = await runtime.before("agent.session_open", {
+          ...input,
+          reason: "refresh",
+        });
+        expect(refreshed.mcpServers?.["paseo-employee-rooms"]).not.toEqual(config);
+        expect((await fetch(config.url, { method: "POST", headers: config.headers })).status).toBe(
+          403,
+        );
+        await runtime.stopAll();
+        await expect(fetch(config.url)).rejects.toThrow();
+      } finally {
+        await runtime.stopAll();
+        vi.unstubAllEnvs();
+        bridge.closeAllConnections();
+        await new Promise<void>((resolve) => bridge.close(() => resolve()));
+      }
+    },
+  );
+
   it.each([
     { specifier: "@getpaseo/plugin", moduleDirectory: "shared" },
     { specifier: "@getpaseo/plugin", moduleDirectory: "server" },

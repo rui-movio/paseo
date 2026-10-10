@@ -40,6 +40,11 @@ interface PluginNavigableHostProps extends PluginHostProps {
       readonly serverId?: string;
     }) => void;
     readonly openAgent: (input: { readonly agentId: string; readonly serverId?: string }) => void;
+    /** Appends reviewed context without submitting a turn or replacing existing content. */
+    readonly appendToAgentDraft?: (input: {
+      readonly agentId: string;
+      readonly text: string;
+    }) => Promise<void>;
     readonly openWorkspace: (input: {
       readonly workspaceId: string;
       readonly serverId?: string;
