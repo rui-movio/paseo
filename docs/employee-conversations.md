@@ -24,7 +24,9 @@ instructions are saved before sending, in a separate task conversation. The sele
 stable teammate identity stays attached to the room; an unavailable target is reported
 instead of sending the request to the parent employee or a different agent.
 
-A correlated final response moves the task to **Needs review**. Inspect the response
+A correlated final response moves the task to **Needs review**. ARM can complete an
+existing visible post with a textless signal; the post becomes the result without
+adding a duplicate message or displaying the agent's terminal recap. Inspect the response
 and send follow-ups before choosing **Review and complete**. Completion in Paseo is
 explicit; optionally choose a completed workflow state from the issue's current Linear
 team. Assignment does not change Linear's human assignee or workflow status. The
