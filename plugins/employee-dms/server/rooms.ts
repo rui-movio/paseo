@@ -5,12 +5,24 @@ import {
   conversationSchema,
   employeeSchema,
   roomSchema,
+  messageSchema,
   type ConversationState,
   type Message,
 } from "../shared/rooms.js";
 
-const connectionSchema = z.object({ baseUrl: z.string().url(), token: z.string().min(1) });
+const connectionSchema = z.object({
+  baseUrl: z.string().url(),
+  token: z.string().min(1),
+  features: z.array(z.string()).optional(),
+});
+const historySchema = z.object({
+  room: roomSchema,
+  messages: z.array(messageSchema),
+  pendingId: z.string().nullable(),
+  pendingSince: z.number(),
+});
 const eventsSchema = z.object({
+  room: roomSchema.optional(),
   events: z.array(
     z.object({
       seq: z.number().int().nonnegative(),
@@ -28,6 +40,8 @@ interface RoomCache {
   reading: Promise<void> | null;
   pendingId: string | null;
   pendingSince: number;
+  version: number;
+  sending: boolean;
 }
 interface RoomConnection {
   baseUrl: string;
@@ -60,6 +74,10 @@ export class EmployeeRooms {
       { timeout: 20000, maxBuffer: 65536, signal: this.abort.signal },
     );
     const connection = connectionSchema.parse(JSON.parse(result.stdout));
+    if (!connection.features?.includes("history") || !connection.features.includes("resume"))
+      throw new Error(
+        "Update hg-connect on this daemon machine to enable saved conversations and resume.",
+      );
     const url = new URL(connection.baseUrl);
     if (
       url.protocol !== "http:" ||
@@ -116,22 +134,31 @@ export class EmployeeRooms {
         continue;
       }
       if (!response.ok) {
-        const failure = z.object({ error: z.string(), ended: z.boolean().optional() }).parse(data);
-        if (failure.ended) {
-          const id = suffix.split("/")[2];
-          if (id && this.cache.has(id)) this.cache.get(id)!.conversation.ended = true;
-        }
-        throw new Error(failure.error);
+        throw this.failure(suffix, data);
       }
       return schema.parse(data);
     }
     throw new Error("Could not reconnect to the room bridge.");
+  }
+  private failure(suffix: string, data: unknown): Error {
+    const failure = z
+      .object({ error: z.string(), ended: z.boolean().optional(), paused: z.boolean().optional() })
+      .parse(data);
+    const id = suffix.split("/")[2];
+    const entry = id ? this.cache.get(id) : undefined;
+    if (entry) {
+      if (failure.paused) entry.conversation.paused = true;
+      if (failure.ended) entry.conversation.ended = true;
+    }
+    return new Error(failure.error);
   }
   async state(): Promise<ConversationState> {
     const [employees, listed] = await Promise.all([
       this.request("/employees", z.object({ ai_employees: z.array(employeeSchema) })),
       this.request("/rooms", z.object({ rooms: z.array(roomSchema) })),
     ]);
+    const listedIds = new Set(listed.rooms.map((room) => room.room));
+    for (const id of this.cache.keys()) if (!listedIds.has(id)) this.cache.delete(id);
     for (const room of listed.rooms) {
       if (!this.cache.has(room.room))
         this.cache.set(room.room, {
@@ -148,15 +175,47 @@ export class EmployeeRooms {
           reading: null,
           pendingId: null,
           pendingSince: 0,
+          version: 0,
+          sending: false,
         });
       this.cache.get(room.room)!.conversation.started = room.started;
     }
     await Promise.all(
+      listed.rooms.map(async (room) => {
+        const entry = this.cache.get(room.room)!;
+        await entry.reading;
+        const version = entry.version;
+        const history = await this.request(`/rooms/${room.room}/history`, historySchema);
+        if (
+          entry.sending ||
+          entry.version !== version ||
+          history.room.after < entry.conversation.after
+        )
+          return;
+        Object.assign(entry.conversation, history.room, {
+          messages: history.messages,
+          ended: history.room.ended === true,
+          historyGap: history.room.historyGap === true,
+          pending: history.pendingId !== null && this.now() - history.pendingSince < 180000,
+        });
+        entry.version++;
+        entry.pendingId = entry.conversation.pending ? history.pendingId : null;
+        entry.pendingSince = history.pendingSince;
+      }),
+    );
+    const polls = await Promise.allSettled(
       [...this.cache.values()]
-        .filter((entry) => !entry.conversation.ended)
+        .filter((entry) => !entry.conversation.ended && !entry.conversation.paused)
         .map((entry) => this.poll(entry.conversation.room)),
     );
+    const failed = polls.find((result) => result.status === "rejected");
     return {
+      ...(failed?.status === "rejected"
+        ? {
+            connectionError:
+              failed.reason instanceof Error ? failed.reason.message : String(failed.reason),
+          }
+        : {}),
       employees: employees.ai_employees,
       conversations: [...this.cache.values()].map((entry) => structuredClone(entry.conversation)),
     };
@@ -191,6 +250,8 @@ export class EmployeeRooms {
           reading: null,
           pendingId: null,
           pendingSince: 0,
+          version: 0,
+          sending: false,
         });
         return room;
       })
@@ -204,8 +265,17 @@ export class EmployeeRooms {
       throw new Error("This DM has ended. Start a new conversation.");
     return entry;
   }
+  async resume(id: string) {
+    const room = await this.request(`/rooms/${id}/resume`, roomSchema, {});
+    const entry = this.requireRoom(id);
+    entry.version++;
+    Object.assign(entry.conversation, room, { pending: false, activity: "" });
+    entry.pendingId = null;
+    return room;
+  }
   async poll(id: string): Promise<void> {
     const entry = this.requireRoom(id);
+    if (entry.conversation.paused) return;
     if (entry.reading) return entry.reading;
     entry.reading = this.receive(entry).finally(() => {
       entry.reading = null;
@@ -219,6 +289,7 @@ export class EmployeeRooms {
       `/rooms/${room.room}/events?after=${room.after}&wait=0`,
       eventsSchema,
     );
+    entry.version++;
     for (const event of result.events) {
       if (event.seq <= room.after) continue;
       if (event.seq > room.after + 1) room.historyGap = true;
@@ -243,6 +314,12 @@ export class EmployeeRooms {
         entry.pendingId = null;
       }
     }
+    if (result.room) Object.assign(room, result.room);
+    if (room.paused) {
+      room.pending = false;
+      entry.pendingId = null;
+      room.activity = "";
+    }
     if (entry.pendingId && this.now() - entry.pendingSince >= 180000) {
       room.pending = false;
       entry.pendingId = null;
@@ -251,7 +328,6 @@ export class EmployeeRooms {
   private append(entry: RoomCache, message: Message): void {
     if (!entry.conversation.messages.some((existing) => existing.id === message.id))
       entry.conversation.messages.push(message);
-    entry.conversation.messages = entry.conversation.messages.slice(-200);
   }
   async send(
     id: string,
@@ -260,8 +336,14 @@ export class EmployeeRooms {
     sender: "you" | "agent" = "you",
   ): Promise<string> {
     const entry = this.requireRoom(id);
+    const previous = entry.conversation.messages.find((message) => message.id === messageId);
+    if (previous?.sender === "agent") sender = "agent";
+    if (entry.conversation.paused)
+      throw new Error("Resume this DM before sending another message.");
     if (entry.pendingId && entry.pendingId !== messageId)
       throw new Error("Wait for this employee’s current answer before sending another question.");
+    entry.version++;
+    entry.sending = true;
     entry.pendingId = messageId;
     entry.pendingSince = this.now();
     entry.conversation.pending = true;
@@ -273,8 +355,11 @@ export class EmployeeRooms {
         expects_reply: true,
       });
       entry.conversation.started = true;
+      const existing = entry.conversation.messages.find((message) => message.id === sent.id);
+      if (existing) existing.delivery = "sent";
       this.append(entry, {
         id: sent.id,
+        delivery: "sent",
         sender,
         text,
         at: new Date(this.now()).toISOString(),
@@ -286,6 +371,9 @@ export class EmployeeRooms {
       entry.pendingId = null;
       entry.conversation.pending = false;
       throw error;
+    } finally {
+      entry.sending = false;
+      entry.version++;
     }
   }
   async ask(employee: string, question: string): Promise<string> {
@@ -312,6 +400,23 @@ export class EmployeeRooms {
     }
     return `${room.name} has not replied within 3 minutes. A late answer will appear in Conversations.`;
   }
+  async resumeEmployee(employee: string): Promise<string> {
+    const state = await this.state();
+    const employeeId = state.employees.find(
+      (candidate) => candidate.slug === employee,
+    )?.ai_employee_id;
+    const room = state.conversations.find(
+      (candidate) =>
+        !candidate.ended &&
+        (candidate.room === employee ||
+          candidate.aiEmployeeId === employee ||
+          candidate.aiEmployeeId === employeeId ||
+          candidate.name.toLowerCase() === employee.toLowerCase()),
+    );
+    if (!room) throw new Error("Choose an existing employee DM to resume.");
+    await this.resume(room.room);
+    return `${room.name}'s DM resumed. Your next message will include recent saved history as context.`;
+  }
   async read(employee: string, limit: number): Promise<string> {
     const state = await this.state();
     const match = state.employees.find(
@@ -322,13 +427,13 @@ export class EmployeeRooms {
     );
     const room = state.conversations.find(
       (candidate) =>
-        !candidate.ended &&
-        (candidate.room === employee || candidate.aiEmployeeId === match?.ai_employee_id),
+        candidate.room === employee ||
+        (!candidate.ended && candidate.aiEmployeeId === match?.ai_employee_id),
     );
-    if (!room || room.ended)
+    if (!room)
       return "No open DM with that employee. Open it in Conversations or use ask_employee.";
-    await this.poll(room.room);
-    const messages = this.requireRoom(room.room).conversation.messages.slice(-limit);
+    if (!room.ended && !room.paused) await this.poll(room.room);
+    const messages = this.cache.get(room.room)!.conversation.messages.slice(-limit);
     return (
       messages
         .map(
@@ -339,11 +444,13 @@ export class EmployeeRooms {
     );
   }
   markRead(id: string): void {
-    this.requireRoom(id).conversation.unread = 0;
+    const entry = this.cache.get(id);
+    if (entry) entry.conversation.unread = 0;
   }
   async end(id: string): Promise<void> {
     const entry = this.requireRoom(id);
     await this.request(`/rooms/${id}`, z.object({ ended: z.literal(true) }), undefined, "DELETE");
+    entry.version++;
     entry.conversation.ended = true;
     entry.pendingId = null;
     entry.conversation.pending = false;

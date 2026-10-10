@@ -1,5 +1,14 @@
 import { useCallback, useMemo, useReducer, useState, type ReactNode } from "react";
-import { Pressable, Text, View, type StyleProp, type ViewStyle } from "react-native";
+import {
+  Platform,
+  Pressable,
+  Text,
+  View,
+  type NativeSyntheticEvent,
+  type TextInputKeyPressEventData,
+  type StyleProp,
+  type ViewStyle,
+} from "react-native";
 import { Icon, Modal, ScrollView, TextInput } from "@getpaseo/plugin/client/react-native";
 import { quoteMessage, type Message } from "../shared/rooms.js";
 import {
@@ -166,7 +175,7 @@ export function Directory(props: DirectoryProps) {
     },
     [conversations, props, pickerOpen],
   );
-  const active = conversations.filter((room) => !room.ended);
+  const active = conversations;
   const matches = active.filter((room) =>
     room.name.toLowerCase().includes(directory.search.toLowerCase()),
   );
@@ -332,6 +341,8 @@ function RoomRow({
           <Text style={styles.badgeLabel}>{room.unread}</Text>
         </View>
       )}
+      {room.ended && <Text style={styles.small}>Ended</Text>}
+      {room.paused && !room.ended && <Text style={styles.small}>Paused</Text>}
       {room.pending && <Icon name="Ellipsis" size={14} color={colors.foregroundMuted} />}
     </Row>
   );
@@ -387,6 +398,7 @@ export interface DetailProps {
   draftId?: string;
   sending: boolean;
   ending: boolean;
+  resuming: boolean;
   forwarding: boolean;
   canForward: boolean;
   agentTitle: string | null;
@@ -394,6 +406,8 @@ export interface DetailProps {
   onDirectory: () => void;
   onEdit: (room: string, text: string) => void;
   onSend: (input: { room: string; text: string; id: string }) => void;
+  onRetry: (input: { room: string; text: string; id: string }) => void;
+  onResume: (room: string) => void;
   onEnd: (room: string) => void;
   onForward: (text: string) => void;
   onAgent?: () => void;
@@ -410,9 +424,9 @@ export function Detail(props: DetailProps) {
     setConfirmEnd(false);
     props.onEnd(room.room);
   }, [props, room.room]);
-  let status = availability(props.employeeStatus ?? "Unknown");
-  if (room.pending) status = "Thinking…";
-  if (room.ended) status = "DM ended";
+  const status = conversationStatus(room, props.employeeStatus);
+  const retryDisabled =
+    props.sending || props.resuming || room.pending || room.paused === true || room.ended;
   return (
     <View style={styles.conversation}>
       <View style={styles.header}>
@@ -457,7 +471,7 @@ export function Detail(props: DetailProps) {
       </View>
       {room.historyGap && (
         <Text style={styles.warning}>
-          Earlier messages are outside the employee’s retained history.
+          Some earlier messages were not saved before the employee session ended.
         </Text>
       )}
       <ScrollView style={styles.scroll} contentContainerStyle={styles.transcript}>
@@ -486,6 +500,9 @@ export function Detail(props: DetailProps) {
               onForward={props.onForward}
               forwarding={props.forwarding}
               canForward={props.canForward}
+              onRetry={props.onRetry}
+              roomId={room.room}
+              retryDisabled={retryDisabled}
             />
           </View>
         ))}
@@ -494,11 +511,12 @@ export function Detail(props: DetailProps) {
         {room.pending && <Icon name="Ellipsis" size={15} color={colors.foregroundMuted} />}
         <Text style={styles.small}>{activity(room)}</Text>
       </View>
-      {!room.ended && <Composer detail={props} />}
+      <ConversationComposer detail={props} />
       <Modal title={`End DM with ${room.name}?`} open={confirmEnd} onOpenChange={setConfirmEnd}>
         <Modal.Content>
           <Text style={styles.text}>
-            This ends the current conversation. You can start a new DM with {room.name} later.
+            This ends the current conversation. Its saved history stays readable. You can start a
+            new DM with {room.name} later.
           </Text>
           <View style={styles.dialogActions}>
             <Action
@@ -522,6 +540,34 @@ export function Detail(props: DetailProps) {
   );
 }
 
+function conversationStatus(room: Conversation, employeeStatus: string | undefined): string {
+  if (room.ended) return "DM ended";
+  if (room.paused) return "Session paused";
+  if (room.pending) return "Thinking…";
+  return availability(employeeStatus ?? "Unknown");
+}
+function ConversationComposer({ detail }: { detail: DetailProps }) {
+  const styles = useStyles(detail.colors);
+  const resume = useCallback(() => detail.onResume(detail.room.room), [detail]);
+  if (detail.room.ended) return null;
+  if (!detail.room.paused) return <Composer detail={detail} />;
+  return (
+    <View style={styles.banner}>
+      <Text style={styles.small}>
+        Your history is saved. Resume opens a new employee session; your next message includes
+        recent history as context.
+      </Text>
+      <Action
+        colors={detail.colors}
+        label={detail.resuming ? "Resuming…" : "Resume conversation"}
+        icon="RotateCcw"
+        disabled={detail.resuming}
+        onPress={resume}
+      />
+    </View>
+  );
+}
+
 function differentDay(message: Message, previous: Message | undefined): boolean {
   return !previous || new Date(previous.at).toDateString() !== new Date(message.at).toDateString();
 }
@@ -540,6 +586,7 @@ function DateDivider({ colors, at }: { colors: Colors; at: string }) {
 }
 function activity(room: Conversation): string {
   if (room.ended) return "This DM ended. Start a new one from the directory.";
+  if (room.paused) return "The employee session ended. Resume to continue.";
   if (room.activity) return `${room.name} ${room.activity}`;
   if (room.pending) return `${room.name} is thinking…`;
   return "";
@@ -555,6 +602,9 @@ function MessageRow({
   onForward,
   forwarding,
   canForward,
+  onRetry,
+  roomId,
+  retryDisabled,
 }: {
   colors: Colors;
   name: string;
@@ -562,11 +612,18 @@ function MessageRow({
   onForward: (text: string) => void;
   forwarding: boolean;
   canForward: boolean;
+  onRetry: DetailProps["onRetry"];
+  roomId: string;
+  retryDisabled: boolean;
 }) {
   const styles = useStyles(colors);
   const forward = useCallback(
     () => onForward(quoteMessage(name, message)),
     [onForward, name, message],
+  );
+  const retry = useCallback(
+    () => onRetry({ room: roomId, text: message.text, id: message.id }),
+    [onRetry, roomId, message],
   );
   const author = senderLabel(message, name);
   const time = new Date(message.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
@@ -583,6 +640,18 @@ function MessageRow({
         <Text selectable style={styles.body}>
           {message.text}
         </Text>
+        {message.delivery === "unconfirmed" && (
+          <View style={styles.messageActions}>
+            <Text style={styles.small}>Delivery unconfirmed</Text>
+            <Action
+              colors={colors}
+              label="Retry message"
+              icon="RotateCcw"
+              disabled={retryDisabled}
+              onPress={retry}
+            />
+          </View>
+        )}
         {message.sender === "employee" && canForward && (
           <View style={styles.messageActions}>
             <Action
@@ -600,17 +669,34 @@ function MessageRow({
 }
 function Composer({ detail }: { detail: DetailProps }) {
   const styles = useStyles(detail.colors);
+  const keyboardHint = Platform.select({
+    web: "Enter to send · Shift+Enter for newline",
+    default: undefined,
+  });
   const edit = useCallback((text: string) => detail.onEdit(detail.room.room, text), [detail]);
-  const send = useCallback(
-    () =>
-      detail.onSend({
-        room: detail.room.room,
-        text: detail.text,
-        id: detail.draftId ?? detail.newId(),
-      }),
-    [detail],
-  );
   const disabled = !detail.text.trim() || detail.sending || detail.room.pending;
+  const send = useCallback(() => {
+    if (disabled) return;
+    detail.onSend({
+      room: detail.room.room,
+      text: detail.text,
+      id: detail.draftId ?? detail.newId(),
+    });
+  }, [detail, disabled]);
+  const keyPress = useCallback(
+    (event: NativeSyntheticEvent<TextInputKeyPressEventData>) => {
+      const key = event.nativeEvent as TextInputKeyPressEventData & {
+        shiftKey?: boolean;
+        isComposing?: boolean;
+        keyCode?: number;
+        repeat?: boolean;
+      };
+      if (key.key !== "Enter" || key.shiftKey || key.isComposing || key.keyCode === 229) return;
+      event.preventDefault();
+      if (!key.repeat) send();
+    },
+    [send],
+  );
   const sendStyle = useMemo(() => [styles.send, disabled && styles.disabled], [styles, disabled]);
   return (
     <View style={styles.composerFrame}>
@@ -623,6 +709,7 @@ function Composer({ detail }: { detail: DetailProps }) {
           placeholderTextColor={detail.colors.foregroundMuted}
           style={styles.input}
           onChangeText={edit}
+          onKeyPress={Platform.select({ web: keyPress, default: undefined })}
           editable={!detail.sending}
         />
         <View style={styles.composerFooter}>
@@ -641,6 +728,7 @@ function Composer({ detail }: { detail: DetailProps }) {
             <Icon name="ArrowUp" size={13} color={detail.colors.accentForeground} />
           </Pressable>
         </View>
+        {keyboardHint && <Text style={styles.keyboardHint}>{keyboardHint}</Text>}
       </View>
     </View>
   );

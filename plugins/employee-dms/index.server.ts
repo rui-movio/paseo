@@ -5,7 +5,15 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import type { PluginServerContext, PluginHandlerContext } from "@getpaseo/plugin/server";
 import { z } from "zod";
 import { EmployeeRooms } from "./server/rooms.js";
-import { stateRpc, openRpc, sendRpc, readRpc, endRpc, type Scope } from "./shared/rooms.js";
+import {
+  stateRpc,
+  openRpc,
+  sendRpc,
+  readRpc,
+  endRpc,
+  resumeRpc,
+  type Scope,
+} from "./shared/rooms.js";
 
 export default function contribute(server: PluginServerContext) {
   const contexts = new Map<string, EmployeeRooms>();
@@ -39,6 +47,9 @@ export default function contribute(server: PluginServerContext) {
     (await roomsFor(input, paseo)).markRead(input.room);
     return { ok: true as const };
   });
+  server.handle(resumeRpc, async (input, { paseo }) =>
+    (await roomsFor(input, paseo)).resume(input.room),
+  );
   server.handle(endRpc, async (input, { paseo }) => {
     await (await roomsFor(input, paseo)).end(input.room);
     return { ok: true as const };
@@ -110,6 +121,17 @@ export default function contribute(server: PluginServerContext) {
       },
       async ({ employee, limit }) => ({
         content: [{ type: "text", text: await rooms.read(employee, limit) }],
+      }),
+    );
+    mcp.registerTool(
+      "resume_employee",
+      {
+        description:
+          "Resume an existing employee DM only when the user asks to continue it. Opens a fresh employee session with saved context on the next message; sends nothing now.",
+        inputSchema: { employee: z.string() },
+      },
+      async ({ employee }) => ({
+        content: [{ type: "text", text: await rooms.resumeEmployee(employee) }],
       }),
     );
     const transport = new StreamableHTTPServerTransport({

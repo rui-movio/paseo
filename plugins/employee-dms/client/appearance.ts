@@ -217,6 +217,7 @@ function createStyles(colors: Colors) {
       paddingHorizontal: 10,
       paddingBottom: 9,
     },
+    keyboardHint: { ...small, paddingHorizontal: 10, paddingBottom: 8 },
     composerIdentity: { flex: 1, flexDirection: "row", alignItems: "center", gap: 6 },
     send: {
       flexDirection: "row",
