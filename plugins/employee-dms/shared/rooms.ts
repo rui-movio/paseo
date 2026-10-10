@@ -3,6 +3,17 @@ import { z } from "zod";
 
 export const scopeSchema = z.object({ workspaceId: z.string().min(1), agentId: z.string().min(1) });
 export type Scope = z.infer<typeof scopeSchema>;
+export const targetSchema = z.object({
+  kind: z.enum(["jerrai", "arm"]),
+  id: z.string().min(1).max(256),
+});
+export const targetSummarySchema = targetSchema.extend({
+  name: z.string(),
+  status: z.string(),
+  available: z.boolean(),
+  description: z.string().optional(),
+});
+export type Target = z.infer<typeof targetSchema>;
 export const employeeSchema = z.object({
   ai_employee_id: z.string(),
   name: z.string(),
@@ -14,6 +25,7 @@ export const roomSchema = z.object({
   room: z.string(),
   aiEmployeeId: z.string(),
   name: z.string(),
+  target: targetSchema.optional(),
   after: z.number(),
   createdAt: z.string(),
   started: z.boolean().optional(),
@@ -52,8 +64,13 @@ export const stateRpc = defineRpc({
 });
 export const openRpc = defineRpc({
   name: "conversations.open",
-  input: scopeSchema.extend({ employee: z.string().min(1) }),
+  input: scopeSchema.extend({ employee: z.string().min(1), target: targetSchema.optional() }),
   output: roomSchema,
+});
+export const targetsRpc = defineRpc({
+  name: "conversations.targets",
+  input: scopeSchema.extend({ employee: z.string().min(1) }),
+  output: z.object({ targets: z.array(targetSummarySchema) }),
 });
 export const sendRpc = defineRpc({
   name: "conversations.send",

@@ -6,11 +6,46 @@ import {
   useRpc,
   type PluginAgentPanelProps,
   type PluginClientContext,
+  type PluginSidebarItemProps,
 } from "@getpaseo/plugin/client";
 import { useToast } from "@getpaseo/plugin/client/react-native";
 import { Directory, Detail, EmptyConversation } from "./client/conversations.js";
 import { useStyles, type Colors, type Conversation, type Employee } from "./client/appearance.js";
 import { stateRpc, openRpc, sendRpc, readRpc, endRpc, resumeRpc } from "./shared/rooms.js";
+
+import { SidebarRow } from "@getpaseo/plugin/client/ui";
+import { TaskInbox, views } from "./client/tasks.js";
+
+function TaskNavigation(props: PluginSidebarItemProps) {
+  return (
+    <>
+      {views.map((view) => (
+        <TaskNavigationRow key={view.id} view={view} {...props} />
+      ))}
+    </>
+  );
+}
+function TaskNavigationRow({
+  currentScreen,
+  openScreen,
+  view,
+}: PluginSidebarItemProps & { view: (typeof views)[number] }) {
+  const open = useCallback(
+    () => openScreen({ screenId: "inbox", params: { view: view.id } }),
+    [openScreen, view.id],
+  );
+  return (
+    <SidebarRow
+      id={view.id}
+      icon={view.icon}
+      label={view.title}
+      active={
+        currentScreen?.screenId === "inbox" && (currentScreen.params.view ?? "inbox") === view.id
+      }
+      onPress={open}
+    />
+  );
+}
 
 interface DraftState {
   selected: string | null;
@@ -245,6 +280,12 @@ function ConnectionStatus({
   return null;
 }
 export default function contribute(client: PluginClientContext) {
+  client.addScreen({
+    id: "inbox",
+    title: (params) => views.find((view) => view.id === (params.view ?? "inbox"))?.title ?? "Inbox",
+    Component: TaskInbox,
+  });
+  client.addSidebarHeaderItem({ id: "tasks", title: "Employee tasks", Component: TaskNavigation });
   client.addWorkspacePanel({
     id: "conversations",
     title: "Conversations",

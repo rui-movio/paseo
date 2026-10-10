@@ -155,6 +155,28 @@ function fixture() {
 }
 
 describe("employee conversations", () => {
+  it("refuses requests when a refreshed bridge belongs to a different account", async () => {
+    let requests = 0;
+    const client = new EmployeeRooms({
+      scope: "saved-task",
+      owner: "a".repeat(64),
+      connect: async () => ({
+        baseUrl: "http://127.0.0.1:1234",
+        token: "fixture",
+        owner: "b".repeat(64),
+      }),
+      fetchImpl: async () => {
+        requests++;
+        throw new Error("Unexpected request");
+      },
+    });
+    try {
+      await expect(client.open("emp-1")).rejects.toThrow("Genesis account changed");
+      expect(requests).toBe(0);
+    } finally {
+      client.dispose();
+    }
+  });
   it("reconnects concurrent directory reads after the bridge moves to a new port", async () => {
     function bridge() {
       return createServer((request, response) => {

@@ -1,4 +1,57 @@
-# Employee conversations
+# Linear inbox and employee conversations
+
+The global sidebar contains **Inbox**, **Assigned tasks**, **Needs review**, and
+**Conversations**. These screens work without a local coding-agent session. The
+built-in `employee-dms` plugin uses the host's signed-in hg-connect bridge.
+
+## Linear tasks
+
+V1 uses Linear as its only task source. Create a Linear ticket for a Slack ask first,
+then import it into Paseo. Import by issue identifier or Linear link, or search titles
+across all accessible teams in the connected workspace. A team filter is optional.
+Importing never sends an employee message. Reimporting the same issue refreshes its
+saved snapshot without creating a duplicate task.
+
+Set `LINEAR_API_KEY` or `LINEAR_OAUTH_TOKEN` in the **daemon process environment** on
+each host, then restart that daemon. OAuth tokens use Bearer authentication; personal
+API keys use Linear's raw Authorization format. Credentials remain on the daemon.
+Read access supports import/search; write access is needed for explicit completion
+in Linear. V1 consumes an existing credential; it does not provide an OAuth login UI.
+
+Select a task and **Assign task**. Choose an available employee or expand it to choose
+a Jerrai teammate or Hermes ARM persistent agent. The frozen issue context and your
+instructions are saved before sending, in a separate task conversation. The selected
+stable teammate identity stays attached to the room; an unavailable target is reported
+instead of sending the request to the parent employee or a different agent.
+
+A correlated final response moves the task to **Needs review**. Inspect the response
+and send follow-ups before choosing **Review and complete**. Completion in Paseo is
+explicit; optionally choose a completed workflow state from the issue's current Linear
+team. Assignment does not change Linear's human assignee or workflow status. The
+employee receives an instruction to return evidence for human review.
+
+Task state and activity are saved privately under
+`$PASEO_HOME/employee-tasks/<Genesis account key>.json`, using atomic writes. The room
+bridge saves its transcript separately. Restarting never replays an assignment. An
+unconfirmed delivery exposes **Retry delivery**, preserving the original message ID,
+body, and recipient. **Resume conversation** obtains a fresh room session without
+sending; an unanswered resumed conversation cannot be completed until a result arrives.
+
+Linear snapshots update on import, **Refresh issue**, and explicit Linear completion.
+V1 does not automatically synchronize all Linear issues, ingest Slack, post Slack
+replies, create Linear issues, or publish result comments. Search shows the latest
+40 matches. Room polling checks working tasks for replies while the inbox service is
+active. History and assignment state belong to the selected host and Genesis account;
+they do not synchronize between machines.
+
+## Direct conversations
+
+**Conversations** opens global host DMs with employees and named teammates. These DMs
+are separate from task rooms. Expanding teammates requires matching hg-connect, agentd,
+and pod adapter builds, plus a matching ARM build for Hermes targets. Main employee
+DMs remain usable on pods without the new teammate directory.
+
+## Workspace conversations
 
 Open **Conversations** in a local agent's workspace panel, or use `/room`. The
 built-in `employee-dms` plugin connects to a signed-in `hg-connect` installation.
