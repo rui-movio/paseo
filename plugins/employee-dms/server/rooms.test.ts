@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import { describe, expect, it } from "vitest";
 import { EmployeeRooms } from "./rooms.js";
-import { quoteMessage } from "../shared/rooms.js";
+import { quoteMessage, type Message } from "../shared/rooms.js";
 
 function fixture() {
   const employees = [
@@ -14,6 +14,9 @@ function fixture() {
     after: number;
     createdAt: string;
     started: boolean;
+    paused?: boolean;
+    ended?: boolean;
+    historyGap?: boolean;
   }> = [];
   const events: Array<{
     seq: number;
@@ -23,8 +26,11 @@ function fixture() {
     in_reply_to?: string;
   }> = [];
   const sent: Array<{ id: string; text: string; kind: string }> = [];
+  const messages: Message[] = [];
+  let pendingId: string | null = null;
   let opens = 0;
   let failSend = false;
+  let failRead = false;
   let answer = false;
   let connections = 0;
   const fetchImpl: typeof fetch = async (input, init) => {
@@ -46,13 +52,35 @@ function fixture() {
       rooms.push(room);
       return Response.json(room, { status: 201 });
     }
+    if (path.endsWith("/history"))
+      return Response.json({ room: rooms[0], messages, pendingId, pendingSince: Date.now() });
+    if (path.endsWith("/resume")) {
+      rooms[0].paused = false;
+      rooms[0].started = false;
+      return Response.json(rooms[0]);
+    }
     if (path.endsWith("/messages")) {
       const body = await request.json();
       sent.push(body);
+      let message = messages.find((entry) => entry.id === body.id);
+      if (!message) {
+        message = {
+          id: body.id,
+          sender: body.kind === "agent" ? "agent" : "you",
+          text: body.text,
+          at: new Date().toISOString(),
+          update: false,
+          replyTo: null,
+          delivery: "unconfirmed",
+        };
+        messages.push(message);
+      }
       if (failSend) {
         failSend = false;
         throw new Error("Connection closed after admission");
       }
+      message.delivery = "sent";
+      pendingId = body.id;
       rooms[0].started = true;
       if (answer)
         events.push({
@@ -64,11 +92,32 @@ function fixture() {
         });
       return Response.json({ id: body.id }, { status: 202 });
     }
-    if (path.endsWith("/events"))
+    if (path.endsWith("/events")) {
+      if (failRead) return Response.json({ error: "Employee pod unavailable" }, { status: 502 });
+      const added = events.filter((event) => event.seq > rooms[0].after);
+      for (const event of added) {
+        if (event.seq > rooms[0].after + 1) rooms[0].historyGap = true;
+        rooms[0].after = event.seq;
+        messages.push({
+          id: `event-${event.seq}`,
+          sender: "employee",
+          text: event.text,
+          at: event.at,
+          update: event.type === "post",
+          replyTo: event.in_reply_to ?? null,
+        });
+        if (event.in_reply_to === pendingId) pendingId = null;
+      }
       return Response.json({
+        room: rooms[0],
         events: events.filter((event) => event.seq > Number(url.searchParams.get("after"))),
       });
-    if (request.method === "DELETE") return Response.json({ ended: true });
+    }
+    if (request.method === "DELETE") {
+      rooms[0].ended = true;
+      pendingId = null;
+      return Response.json({ ended: true });
+    }
     throw new Error("Unexpected request " + request.url);
   };
   const client = new EmployeeRooms({
@@ -82,9 +131,20 @@ function fixture() {
   return {
     client,
     events,
+    messages,
+    rooms,
+    recreate: () =>
+      new EmployeeRooms({
+        scope: "workspace:agent",
+        connect: async () => ({ baseUrl: "http://127.0.0.1:1234", token: "scoped-capability" }),
+        fetchImpl,
+      }),
     sent,
     opens: () => opens,
     connections: () => connections,
+    failReads: () => {
+      failRead = true;
+    },
     failNext: () => {
       failSend = true;
     },
@@ -213,7 +273,7 @@ describe("employee conversations", () => {
     fake.client.dispose();
   });
 
-  it("retries ambiguous sends with the caller's ID and bounds retained history", async () => {
+  it("retries ambiguous sends with the caller's ID and retains the full saved history", async () => {
     const fake = fixture();
     const room = await fake.client.open("Jerry");
     fake.failNext();
@@ -230,7 +290,7 @@ describe("employee conversations", () => {
     for (let seq = 10; seq < 221; seq++)
       fake.events.push({ seq, type: "post", text: `Update ${seq}`, at: "2026-10-09T12:02:00Z" });
     const state = await fake.client.state();
-    expect(state.conversations[0].messages).toHaveLength(200);
+    expect(state.conversations[0].messages).toHaveLength(212);
     expect(state.conversations[0].historyGap).toBe(true);
     await fake.client.end(room.room);
     await expect(fake.client.send(room.room, "Again", "m_bbbbbbbbbbbbbbbb")).rejects.toThrow(
@@ -238,6 +298,47 @@ describe("employee conversations", () => {
     );
     fake.client.dispose();
     await expect(fake.client.state()).rejects.toThrow("disabled");
+  });
+
+  it("restores saved history in a new daemon and resumes a paused room without sending", async () => {
+    const fake = fixture();
+    const room = await fake.client.open("Jerry");
+    fake.failNext();
+    await expect(fake.client.send(room.room, "Keep this", "m_aaaaaaaaaaaaaaaa")).rejects.toThrow();
+    fake.client.dispose();
+    fake.rooms[0].paused = true;
+    const restored = fake.recreate();
+    let state = await restored.state();
+    expect(state.conversations[0]).toMatchObject({
+      paused: true,
+      messages: [{ id: "m_aaaaaaaaaaaaaaaa", delivery: "unconfirmed", text: "Keep this" }],
+    });
+    await restored.resume(room.room);
+    expect(fake.sent).toHaveLength(1);
+    state = await restored.state();
+    expect(state.conversations[0].paused).toBe(false);
+    await restored.send(room.room, "Keep this", "m_aaaaaaaaaaaaaaaa");
+    await restored.end(room.room);
+    restored.markRead(room.room);
+    state = await restored.state();
+    expect(state.conversations[0]).toMatchObject({
+      ended: true,
+      messages: [{ delivery: "sent", text: "Keep this" }],
+    });
+    restored.dispose();
+  });
+
+  it("shows saved history during a pod outage and drops cached rooms when the account's list changes", async () => {
+    const fake = fixture();
+    const room = await fake.client.open("Jerry");
+    await fake.client.send(room.room, "Saved question", "m_aaaaaaaaaaaaaaaa");
+    fake.failReads();
+    const state = await fake.client.state();
+    expect(state.connectionError).toContain("unavailable");
+    expect(state.conversations[0].messages[0].text).toBe("Saved question");
+    fake.rooms.length = 0;
+    expect((await fake.client.state()).conversations).toEqual([]);
+    fake.client.dispose();
   });
 
   it("read_room never opens a DM or sends a message", async () => {

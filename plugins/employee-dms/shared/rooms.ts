@@ -17,6 +17,9 @@ export const roomSchema = z.object({
   after: z.number(),
   createdAt: z.string(),
   started: z.boolean().optional(),
+  paused: z.boolean().optional(),
+  ended: z.boolean().optional(),
+  historyGap: z.boolean().optional(),
 });
 export const messageSchema = z.object({
   id: z.string(),
@@ -25,6 +28,7 @@ export const messageSchema = z.object({
   at: z.string(),
   update: z.boolean(),
   replyTo: z.string().nullable(),
+  delivery: z.enum(["sent", "unconfirmed"]).optional(),
 });
 export type Message = z.infer<typeof messageSchema>;
 export const conversationSchema = roomSchema.extend({
@@ -36,6 +40,7 @@ export const conversationSchema = roomSchema.extend({
   historyGap: z.boolean(),
 });
 export const stateSchema = z.object({
+  connectionError: z.string().optional(),
   employees: z.array(employeeSchema),
   conversations: z.array(conversationSchema),
 });
@@ -68,6 +73,11 @@ export const endRpc = defineRpc({
   name: "conversations.end",
   input: scopeSchema.extend({ room: z.string() }),
   output: z.object({ ok: z.literal(true) }),
+});
+export const resumeRpc = defineRpc({
+  name: "conversations.resume",
+  input: scopeSchema.extend({ room: z.string() }),
+  output: roomSchema,
 });
 export function quoteMessage(name: string, message: Message): string {
   return `${name} said in the employee DM (quoted context):\n${message.text

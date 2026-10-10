@@ -10,7 +10,7 @@ import {
 import { useToast } from "@getpaseo/plugin/client/react-native";
 import { Directory, Detail, EmptyConversation } from "./client/conversations.js";
 import { useStyles, type Colors, type Conversation, type Employee } from "./client/appearance.js";
-import { stateRpc, openRpc, sendRpc, readRpc, endRpc } from "./shared/rooms.js";
+import { stateRpc, openRpc, sendRpc, readRpc, endRpc, resumeRpc } from "./shared/rooms.js";
 
 interface DraftState {
   selected: string | null;
@@ -44,6 +44,15 @@ function reduce(state: DraftState, action: DraftAction): DraftState {
     ids: { ...state.ids, [action.room]: newId() },
   };
 }
+function draftText(state: DraftState, room: string): string {
+  return state.drafts[room] ?? "";
+}
+function connectionError(
+  error: Error | null,
+  state: { connectionError?: string } | undefined,
+): string | undefined {
+  return error?.message ?? state?.connectionError;
+}
 const emptyConversations: Conversation[] = [];
 const emptyEmployees: Employee[] = [];
 
@@ -53,6 +62,7 @@ function Conversations(props: PluginAgentPanelProps) {
   const sendMessage = useRpc(sendRpc);
   const readRoom = useRpc(readRpc);
   const endRoom = useRpc(endRpc);
+  const resumeRoom = useRpc(resumeRpc);
   const queryClient = useQueryClient();
   const toast = useToast();
   const agentTitle = useAgent(props.agentId, (agent) => agent.title);
@@ -95,6 +105,17 @@ function Conversations(props: PluginAgentPanelProps) {
       dispatch({ kind: "sent", room: input.room });
       await refresh();
     },
+    onError: failure,
+  });
+  const resend = useMutation({
+    mutationFn: (input: { room: string; text: string; id: string }) =>
+      sendMessage({ ...scope, ...input }),
+    onSuccess: refresh,
+    onError: failure,
+  });
+  const resume = useMutation({
+    mutationFn: (room: string) => resumeRoom({ ...scope, room }),
+    onSuccess: refresh,
     onError: failure,
   });
   const mark = useMutation({
@@ -147,7 +168,7 @@ function Conversations(props: PluginAgentPanelProps) {
       <ConnectionStatus
         colors={props.theme.colors}
         loading={state.isPending}
-        error={state.error?.message}
+        error={connectionError(state.error, state.data)}
         onRetry={retry}
       />
       <View style={styles.panes}>
@@ -170,15 +191,18 @@ function Conversations(props: PluginAgentPanelProps) {
             colors={props.theme.colors}
             compact={props.layout.compact}
             room={selected}
-            text={draft.drafts[selected.room] ?? ""}
+            text={draftText(draft, selected.room)}
             draftId={draft.ids[selected.room]}
-            sending={send.isPending}
+            sending={send.isPending || resend.isPending}
+            resuming={resume.isPending}
             ending={end.isPending}
             forwarding={forward.isPending}
             canForward={Boolean(props.navigation?.appendToAgentDraft)}
             onDirectory={directory}
             onEdit={edit}
             onSend={send.mutate}
+            onRetry={resend.mutate}
+            onResume={resume.mutate}
             onEnd={end.mutate}
             onForward={forward.mutate}
             agentTitle={agentTitle}
