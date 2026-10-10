@@ -33,6 +33,7 @@ const eventsSchema = z.object({
       text: z.string().optional(),
       at: z.string(),
       in_reply_to: z.string().optional(),
+      ref: z.string().optional(),
     }),
   ),
 });
@@ -327,6 +328,10 @@ export class EmployeeRooms {
         room.activity = event.text ?? "";
         continue;
       }
+      if (event.type === "done") {
+        this.completePost(entry, event);
+        continue;
+      }
       if (!event.text) continue;
       room.activity = "";
       this.append(entry, {
@@ -335,10 +340,10 @@ export class EmployeeRooms {
         text: event.text,
         at: event.at,
         update: event.type === "post",
-        replyTo: event.in_reply_to ?? null,
+        replyTo: event.type === "reply" ? (event.in_reply_to ?? null) : null,
       });
       room.unread++;
-      if (event.in_reply_to === entry.pendingId) {
+      if (event.type === "reply" && event.in_reply_to === entry.pendingId) {
         room.pending = false;
         entry.pendingId = null;
       }
@@ -350,6 +355,24 @@ export class EmployeeRooms {
       room.activity = "";
     }
     if (entry.pendingId && this.now() - entry.pendingSince >= 180000) {
+      room.pending = false;
+      entry.pendingId = null;
+    }
+  }
+  private completePost(
+    entry: RoomCache,
+    event: z.infer<typeof eventsSchema>["events"][number],
+  ): void {
+    const room = entry.conversation;
+    const post = room.messages.find(
+      (message) => message.sender === "employee" && message.id === event.ref,
+    );
+    if (post && event.in_reply_to && !post.replyTo) {
+      post.replyTo = event.in_reply_to;
+      post.update = false;
+    }
+    room.activity = "";
+    if (event.in_reply_to && event.in_reply_to === entry.pendingId) {
       room.pending = false;
       entry.pendingId = null;
     }

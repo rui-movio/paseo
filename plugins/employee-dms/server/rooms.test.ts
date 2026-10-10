@@ -21,7 +21,8 @@ function fixture() {
   const events: Array<{
     seq: number;
     type: string;
-    text: string;
+    text?: string;
+    ref?: string;
     at: string;
     in_reply_to?: string;
   }> = [];
@@ -31,8 +32,32 @@ function fixture() {
   let opens = 0;
   let failSend = false;
   let failRead = false;
-  let answer = false;
+  let answer: false | "reply" | "done" = false;
   let connections = 0;
+  function archiveEvents() {
+    const added = events.filter((event) => event.seq > rooms[0].after);
+    for (const event of added) {
+      if (event.seq > rooms[0].after + 1) rooms[0].historyGap = true;
+      rooms[0].after = event.seq;
+      if (event.type === "done") {
+        const result = messages.find((message) => message.id === event.ref);
+        if (result) {
+          result.replyTo = event.in_reply_to ?? null;
+          result.update = false;
+        }
+      } else if (event.text)
+        messages.push({
+          id: `event-${event.seq}`,
+          sender: "employee",
+          text: event.text,
+          at: event.at,
+          update: event.type === "post",
+          replyTo: event.type === "reply" ? (event.in_reply_to ?? null) : null,
+        });
+      if (["reply", "done"].includes(event.type) && event.in_reply_to === pendingId)
+        pendingId = null;
+    }
+  }
   const fetchImpl: typeof fetch = async (input, init) => {
     const request = new Request(input, init);
     const url = new URL(request.url);
@@ -82,7 +107,7 @@ function fixture() {
       message.delivery = "sent";
       pendingId = body.id;
       rooms[0].started = true;
-      if (answer)
+      if (answer === "reply")
         events.push({
           seq: events.length + 1,
           type: "reply",
@@ -90,24 +115,19 @@ function fixture() {
           at: "2026-10-09T12:01:00Z",
           in_reply_to: body.id,
         });
+      if (answer === "done") {
+        const seq = events.length;
+        events.push(
+          { seq: seq + 1, type: "post", text: "On it", at: "now" },
+          { seq: seq + 2, type: "post", text: "Deploy is green", at: "now" },
+          { seq: seq + 3, type: "done", ref: `event-${seq + 2}`, in_reply_to: body.id, at: "now" },
+        );
+      }
       return Response.json({ id: body.id }, { status: 202 });
     }
     if (path.endsWith("/events")) {
       if (failRead) return Response.json({ error: "Employee pod unavailable" }, { status: 502 });
-      const added = events.filter((event) => event.seq > rooms[0].after);
-      for (const event of added) {
-        if (event.seq > rooms[0].after + 1) rooms[0].historyGap = true;
-        rooms[0].after = event.seq;
-        messages.push({
-          id: `event-${event.seq}`,
-          sender: "employee",
-          text: event.text,
-          at: event.at,
-          update: event.type === "post",
-          replyTo: event.in_reply_to ?? null,
-        });
-        if (event.in_reply_to === pendingId) pendingId = null;
-      }
+      archiveEvents();
       return Response.json({
         room: rooms[0],
         events: events.filter((event) => event.seq > Number(url.searchParams.get("after"))),
@@ -148,8 +168,11 @@ function fixture() {
     failNext: () => {
       failSend = true;
     },
+    complete: () => {
+      answer = "done";
+    },
     answer: () => {
-      answer = true;
+      answer = "reply";
     },
   };
 }
@@ -370,5 +393,62 @@ describe("employee conversations", () => {
     expect(fake.sent).toEqual([]);
     await expect(fake.client.open("Unknown employee")).rejects.toThrow("you can access");
     fake.client.dispose();
+  });
+});
+
+describe("room completion signals", () => {
+  it("marks the existing visible result ready for review without adding text", async () => {
+    const fake = fixture();
+    try {
+      const room = await fake.client.open("jerry");
+      await fake.client.send(room.room, "Review this", "m_review", "human");
+      fake.events.push({ seq: 1, type: "post", text: "On it", in_reply_to: "m_review", at: "now" });
+      let state = await fake.client.state();
+      expect(state.conversations[0].pending).toBe(true);
+      expect(state.conversations[0].messages[1].replyTo).toBeNull();
+      fake.events.push(
+        { seq: 2, type: "post", text: "Result with evidence", at: "now" },
+        { seq: 3, type: "done", ref: "event-2", in_reply_to: "m_review", at: "now" },
+      );
+      state = await fake.client.state();
+      const conversation = state.conversations[0];
+      expect(conversation.pending).toBe(false);
+      expect(conversation.messages).toHaveLength(3);
+      expect(conversation.messages[2]).toMatchObject({
+        id: "event-2",
+        text: "Result with evidence",
+        replyTo: "m_review",
+        update: false,
+      });
+      const restarted = fake.recreate();
+      try {
+        state = await restarted.state();
+        expect(state.conversations[0].messages).toHaveLength(3);
+        expect(state.conversations[0].messages[2].replyTo).toBe("m_review");
+      } finally {
+        restarted.dispose();
+      }
+    } finally {
+      fake.client.dispose();
+    }
+  });
+
+  it("returns the completed post to ask_employee", async () => {
+    const fake = fixture();
+    try {
+      fake.complete();
+      expect(await fake.client.ask("jerry", "Check the deploy")).toBe(
+        "Jerry replied:\n\nDeploy is green",
+      );
+      const state = await fake.client.state();
+      expect(state.conversations[0].messages.map((message) => message.text)).toEqual([
+        "Check the deploy",
+        "On it",
+        "Deploy is green",
+      ]);
+      expect(state.conversations[0].pending).toBe(false);
+    } finally {
+      fake.client.dispose();
+    }
   });
 });
