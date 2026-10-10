@@ -1,3 +1,4 @@
+import { createServer } from "node:http";
 import { describe, expect, it } from "vitest";
 import { EmployeeRooms } from "./rooms.js";
 import { quoteMessage } from "../shared/rooms.js";
@@ -25,6 +26,7 @@ function fixture() {
   let opens = 0;
   let failSend = false;
   let answer = false;
+  let connections = 0;
   const fetchImpl: typeof fetch = async (input, init) => {
     const request = new Request(input, init);
     const url = new URL(request.url);
@@ -71,7 +73,10 @@ function fixture() {
   };
   const client = new EmployeeRooms({
     scope: "workspace:agent",
-    connect: async () => ({ baseUrl: "http://127.0.0.1:1234", token: "scoped-capability" }),
+    connect: async () => {
+      connections++;
+      return { baseUrl: "http://127.0.0.1:1234", token: "scoped-capability" };
+    },
     fetchImpl,
   });
   return {
@@ -79,6 +84,7 @@ function fixture() {
     events,
     sent,
     opens: () => opens,
+    connections: () => connections,
     failNext: () => {
       failSend = true;
     },
@@ -89,6 +95,62 @@ function fixture() {
 }
 
 describe("employee conversations", () => {
+  it("reconnects concurrent directory reads after the bridge moves to a new port", async () => {
+    function bridge() {
+      return createServer((request, response) => {
+        const data = request.url?.endsWith("/employees")
+          ? {
+              ai_employees: [
+                { ai_employee_id: "emp-1", name: "Jerry", status: "running", engine: "jerry" },
+              ],
+            }
+          : { rooms: [] };
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify(data));
+      });
+    }
+    const first = bridge();
+    const second = bridge();
+    let client: EmployeeRooms | undefined;
+    try {
+      await new Promise<void>((resolve) => first.listen(0, "127.0.0.1", resolve));
+      await new Promise<void>((resolve) => second.listen(0, "127.0.0.1", resolve));
+      const firstAddress = first.address();
+      const secondAddress = second.address();
+      if (
+        !firstAddress ||
+        typeof firstAddress === "string" ||
+        !secondAddress ||
+        typeof secondAddress === "string"
+      )
+        throw new Error("Expected TCP bridge addresses");
+      let baseUrl = `http://127.0.0.1:${firstAddress.port}`;
+      let connections = 0;
+      client = new EmployeeRooms({
+        scope: "workspace:agent",
+        connect: async () => {
+          connections++;
+          return { baseUrl, token: "scoped-capability" };
+        },
+      });
+      expect((await client.state()).employees.map((employee) => employee.name)).toEqual(["Jerry"]);
+      expect(connections).toBe(1);
+      baseUrl = `http://127.0.0.1:${secondAddress.port}`;
+      first.closeAllConnections();
+      await new Promise<void>((resolve, reject) =>
+        first.close((error) => (error ? reject(error) : resolve())),
+      );
+      expect((await client.state()).employees.map((employee) => employee.name)).toEqual(["Jerry"]);
+      expect(connections).toBe(2);
+    } finally {
+      client?.dispose();
+      for (const server of [first, second]) {
+        server.closeAllConnections();
+        if (server.listening) await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
+    }
+  });
+
   it("coalesces concurrent opens and gives UI and tools the same attributed transcript", async () => {
     const fake = fixture();
     const [first, second] = await Promise.all([
@@ -158,7 +220,9 @@ describe("employee conversations", () => {
     await expect(fake.client.send(room.room, "Question", "m_aaaaaaaaaaaaaaaa")).rejects.toThrow(
       "Connection closed",
     );
+    expect(fake.sent).toHaveLength(1);
     await fake.client.send(room.room, "Question", "m_aaaaaaaaaaaaaaaa");
+    expect(fake.connections()).toBe(2);
     expect(fake.sent.map((message) => message.id)).toEqual([
       "m_aaaaaaaaaaaaaaaa",
       "m_aaaaaaaaaaaaaaaa",

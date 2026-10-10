@@ -71,34 +71,48 @@ export class EmployeeRooms {
       throw new Error("hg-connect returned an invalid local bridge address.");
     return connection;
   }
+  private invalidateConnection(connecting: Promise<RoomConnection>): void {
+    if (this.connection === connecting) this.connection = null;
+  }
   private async request<T>(
     suffix: string,
     schema: z.ZodType<T>,
     body?: unknown,
     method?: string,
   ): Promise<T> {
+    const requestMethod = method ?? (body === undefined ? "GET" : "POST");
     for (let attempt = 0; attempt < 2; attempt++) {
       if (this.disposed) throw new Error("Employee conversations are disabled.");
       this.connection ??= this.connect();
+      const connecting = this.connection;
       let connection: RoomConnection;
       try {
-        connection = await this.connection;
+        connection = await connecting;
       } catch (error) {
-        this.connection = null;
+        this.invalidateConnection(connecting);
         throw error;
       }
-      const response = await this.fetchImpl(connection.baseUrl + "/_hg_connect/rooms/v1" + suffix, {
-        method: method ?? (body === undefined ? "GET" : "POST"),
-        headers: {
-          authorization: `Bearer ${connection.token}`,
-          "content-type": "application/json",
-        },
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-        signal: AbortSignal.any([this.abort.signal, AbortSignal.timeout(240000)]),
-      });
+      const signal = AbortSignal.any([this.abort.signal, AbortSignal.timeout(240000)]);
+      let response: Response;
+      try {
+        response = await this.fetchImpl(connection.baseUrl + "/_hg_connect/rooms/v1" + suffix, {
+          method: requestMethod,
+          headers: {
+            authorization: `Bearer ${connection.token}`,
+            "content-type": "application/json",
+          },
+          ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+          signal,
+        });
+      } catch (error) {
+        this.invalidateConnection(connecting);
+        // A disconnected send may already have been admitted; only reads can replay automatically.
+        if (requestMethod === "GET" && attempt === 0 && !signal.aborted && !this.disposed) continue;
+        throw error;
+      }
       const data: unknown = await response.json();
       if (response.status === 401 && attempt === 0) {
-        this.connection = null;
+        this.invalidateConnection(connecting);
         continue;
       }
       if (!response.ok) {
