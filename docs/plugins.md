@@ -6,6 +6,8 @@ Paseo executes `index.server.ts` in a subprocess and `index.client.tsx` in every
 
 > **Trust every plugin you add.** `paseo plugin add` and `paseo plugin install` mean “I trust this codebase.” Plugins are unsandboxed: server code and preparation commands run with the daemon user's access on the daemon host, and client contributions run inside Paseo. The repository's dependencies and future updates are part of that trust decision. With `--host`, preparation runs on that remote daemon host.
 
+For the built-in employee DM integration, see [employee conversations](employee-conversations.md).
+
 ## Install a directory source
 
 Create a typecheckable plugin project, install its development dependencies, then install it into
@@ -96,9 +98,12 @@ checks cover that registry. Unlisted directories do not load.
 Desktop packaging ships the entire built-in plugin directory as an external resource,
 including declarations. The external esbuild compiler cannot read Electron's `app.asar`
 filesystem, and packaging dependencies excludes `.d.ts` files needed for import validation.
-Built-ins can import only host modules (`@getpaseo/plugin/*`, `zod`) and Node built-ins:
-outside the archive, nothing resolves an npm dependency, and the dist build test cannot catch
-one because it resolves through the repository's `node_modules`.
+Built-ins can import only host modules and Node built-ins. The host resolves
+`@getpaseo/plugin/*`, `zod`, and the MCP SDK entries
+`@modelcontextprotocol/sdk/server/mcp.js` and
+`@modelcontextprotocol/sdk/server/streamableHttp.js`. Outside the archive, other npm
+dependencies do not resolve; the dist build test cannot catch one because it resolves
+through the repository's `node_modules`.
 The packaged-app smoke check requires every listed built-in to start without relying on
 account credentials.
 

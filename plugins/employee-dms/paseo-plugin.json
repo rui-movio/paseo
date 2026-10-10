@@ -1,0 +1,4 @@
+{
+  "id": "employee-dms",
+  "requirements": { "paseo": ">=0.11.1" }
+}

@@ -556,17 +556,19 @@ const SYSTEM_ERROR_PREFIX = "[System Error]";
 function attachPersistenceCwd(
   handle: AgentPersistenceHandle | null,
   cwd: string,
+  storedConfig: AgentSessionConfig,
 ): AgentPersistenceHandle | null {
   if (!handle) {
     return null;
   }
-  return {
-    ...handle,
-    metadata: {
-      ...handle.metadata,
-      cwd,
-    },
-  };
+  const metadata = { ...handle.metadata, cwd };
+  // Some providers echo launch configuration into their resume handle. Session
+  // capabilities must be issued again; retain only the user's stored MCP entries.
+  if ("mcpServers" in metadata) {
+    if (storedConfig.mcpServers !== undefined) metadata.mcpServers = storedConfig.mcpServers;
+    else delete metadata.mcpServers;
+  }
+  return { ...handle, metadata };
 }
 
 interface SubscriptionRecord {
@@ -1306,12 +1308,17 @@ export class AgentManager {
       storedConfig.cwd,
       paseoToolPolicy,
       options?.env,
-      { reason: "create", purpose: "interactive", workspaceId: options.workspaceId ?? null },
+      {
+        reason: "create",
+        purpose: "interactive",
+        workspaceId: options.workspaceId ?? null,
+        internal: storedConfig.internal === true,
+      },
     );
     const providerLaunchConfig = this.resolveProviderLaunchConfig(launchConfig, launchContext);
     const createOptions = this.buildCreateSessionOptions(options);
     const session = await client.createSession(providerLaunchConfig, launchContext, createOptions);
-    await this.requireExternalMcpSupport(session, storedConfig);
+    await this.requireExternalMcpSupport(session, providerLaunchConfig);
     const agent = await this.registerSession(session, storedConfig, resolvedAgentId, {
       labels: options.labels,
       initialTitle: options.initialTitle,
@@ -1427,6 +1434,7 @@ export class AgentManager {
       {
         reason: "resume",
         purpose,
+        internal: storedConfig.internal === true,
         workspaceId: options?.workspaceId ?? null,
       },
     );
@@ -1437,7 +1445,7 @@ export class AgentManager {
       launchContext,
       currentResumeOptions,
     );
-    await this.requireExternalMcpSupport(session, storedConfig);
+    await this.requireExternalMcpSupport(session, providerLaunchConfig);
     return this.registerSession(session, storedConfig, resolvedAgentId, {
       ...options,
       persistence: handle,
@@ -1485,7 +1493,12 @@ export class AgentManager {
       storedConfig.cwd,
       paseoToolPolicy,
       undefined,
-      { reason: "import", purpose: "interactive", workspaceId: input.workspaceId },
+      {
+        reason: "import",
+        purpose: "interactive",
+        workspaceId: input.workspaceId,
+        internal: storedConfig.internal === true,
+      },
     );
     const providerLaunchConfig = this.resolveProviderLaunchConfig(launchConfig, launchContext);
     const imported = await client.importSession(
@@ -1580,7 +1593,12 @@ export class AgentManager {
       storedConfig.cwd,
       paseoToolPolicy,
       undefined,
-      { reason: "refresh", purpose: "interactive", workspaceId: existing.workspaceId },
+      {
+        reason: "refresh",
+        purpose: "interactive",
+        workspaceId: existing.workspaceId,
+        internal: storedConfig.internal === true,
+      },
     );
     const providerLaunchConfig = this.resolveProviderLaunchConfig(launchConfig, launchContext);
     if (
@@ -1606,7 +1624,7 @@ export class AgentManager {
       session = handle
         ? await client.resumeSession(handle, providerLaunchConfig, launchContext)
         : await client.createSession(providerLaunchConfig, launchContext);
-      await this.requireExternalMcpSupport(session, storedConfig);
+      await this.requireExternalMcpSupport(session, providerLaunchConfig);
       this.assertAcceptingAgentRegistrations();
 
       if (rehydrateFromDisk) {
@@ -2736,7 +2754,11 @@ export class AgentManager {
         ? { provider: mutableAgent.provider, sessionId: mutableAgent.runtimeInfo.sessionId }
         : null);
     if (persistenceHandle) {
-      mutableAgent.persistence = attachPersistenceCwd(persistenceHandle, mutableAgent.cwd);
+      mutableAgent.persistence = attachPersistenceCwd(
+        persistenceHandle,
+        mutableAgent.cwd,
+        mutableAgent.config,
+      );
     }
     this.logger.trace(
       {
@@ -3778,6 +3800,7 @@ export class AgentManager {
       persistence: attachPersistenceCwd(
         options?.persistence ?? session.describePersistence(),
         config.cwd,
+        config,
       ),
       historyPrimed: options?.historyPrimed ?? durableTimelineHasRows,
       lastUserMessageAt: options?.lastUserMessageAt ?? null,
@@ -4083,6 +4106,7 @@ export class AgentManager {
         agent.persistence = attachPersistenceCwd(
           { provider: agent.provider, sessionId: newInfo.sessionId },
           agent.cwd,
+          agent.config,
         );
       }
       // Emit state if runtimeInfo changed so clients get the updated model
@@ -4443,6 +4467,7 @@ export class AgentManager {
           agent.persistence = attachPersistenceCwd(
             { provider: agent.provider, sessionId: event.runtimeInfo.sessionId },
             agent.cwd,
+            agent.config,
           );
         }
         this.applyObservedMode(agent, event.runtimeInfo.modeId ?? agent.currentModeId);
@@ -4516,7 +4541,7 @@ export class AgentManager {
   private refreshSessionPersistence(agent: ActiveManagedAgent): void {
     const handle = agent.session.describePersistence();
     if (handle) {
-      agent.persistence = attachPersistenceCwd(handle, agent.cwd);
+      agent.persistence = attachPersistenceCwd(handle, agent.cwd, agent.config);
     }
   }
 
@@ -5335,9 +5360,11 @@ export class AgentManager {
     opening?: {
       reason: PluginSessionOpenRequest["reason"];
       purpose: PluginSessionOpenRequest["purpose"];
+      internal?: boolean;
       workspaceId?: string | null;
     },
   ): Promise<AgentLaunchContext> {
+    let mcpServers: AgentSessionConfig["mcpServers"];
     if (this.pluginLifecycle) {
       const request: PluginSessionOpenRequest = {
         agentId,
@@ -5346,13 +5373,16 @@ export class AgentManager {
         workspaceId: opening?.workspaceId ?? null,
         reason: opening?.reason ?? "resume",
         purpose: opening?.purpose ?? "interactive",
+        internal: opening?.internal === true,
         env: { ...env },
       };
       const transformed = await this.pluginLifecycle.before("agent.session_open", request);
       env = transformed.env;
+      mcpServers = transformed.mcpServers;
     }
     const context: AgentLaunchContext = {
       agentId,
+      ...(mcpServers ? { mcpServers } : {}),
       env: {
         ...env,
         PASEO_AGENT_ID: agentId,
@@ -5377,7 +5407,11 @@ export class AgentManager {
     launchConfig: AgentSessionConfig,
     launchContext: AgentLaunchContext,
   ): AgentSessionConfig {
-    return launchContext.paseoTools ? stripInternalPaseoMcpServer(launchConfig) : launchConfig;
+    const config = launchContext.paseoTools
+      ? stripInternalPaseoMcpServer(launchConfig)
+      : launchConfig;
+    if (!launchContext.mcpServers) return config;
+    return { ...config, mcpServers: { ...config.mcpServers, ...launchContext.mcpServers } };
   }
 
   private async requireAvailableClient(options: { provider: AgentProvider }): Promise<AgentClient> {

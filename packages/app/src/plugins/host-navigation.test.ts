@@ -87,4 +87,28 @@ describe("plugin host navigation", () => {
     );
     expect(browsers).toEqual([]);
   });
+
+  it("binds draft insertion to the rendering host without submitting a turn", async () => {
+    const drafts: unknown[] = [];
+    const navigation = createPluginHostNavigation("selected", {
+      browserAvailable: false,
+      openAgent: () => {
+        throw new Error("Unexpected navigation");
+      },
+      openWorkspace: () => {
+        throw new Error("Unexpected navigation");
+      },
+      resolveWorkspace: () => null,
+      createBrowser: () => {
+        throw new Error("Unexpected browser");
+      },
+      appendToAgentDraft: async (input) => {
+        drafts.push(input);
+      },
+    });
+    await navigation.appendToAgentDraft!({ agentId: "agent", text: "Jerry said:\n> quoted reply" });
+    expect(drafts).toEqual([
+      { serverId: "selected", agentId: "agent", text: "Jerry said:\n> quoted reply" },
+    ]);
+  });
 });

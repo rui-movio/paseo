@@ -76,6 +76,16 @@ describe("asar esbuild binary resolution", () => {
   });
 });
 
+it("compiles both employee conversation entry points with the public SDK boundaries", async () => {
+  const directory = path.resolve("plugins/employee-dms");
+  const result = await compilePlugin({
+    client: path.join(directory, "index.client.tsx"),
+    server: path.join(directory, "index.server.ts"),
+  });
+  expect(result.clientBundle).toContain("conversations.state");
+  expect(result.serverBundle).toContain("ask_employee");
+});
+
 async function createSplitPlugin(): Promise<{
   directory: string;
   client: string;

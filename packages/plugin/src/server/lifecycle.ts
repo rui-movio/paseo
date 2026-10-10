@@ -36,7 +36,10 @@ export interface PluginSessionOpenRequest {
   cwd: string;
   reason: "create" | "resume" | "refresh" | "import";
   purpose: "interactive" | "history";
+  internal?: boolean;
   env: Record<string, string>;
+  /** Launch-only MCP endpoints. Regenerated on every interactive opening. */
+  mcpServers?: AgentSessionConfig["mcpServers"];
 }
 
 export type PluginTurnOutcome =

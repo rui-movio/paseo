@@ -8,6 +8,7 @@ interface HostNavigationOwner {
   openWorkspace(input: NavigateToWorkspaceInput): void;
   resolveWorkspace(input: { serverId: string; workspaceId: string }): string | null;
   createBrowser(input: { initialUrl: string }): { browserId: string };
+  appendToAgentDraft?(input: { serverId: string; agentId: string; text: string }): Promise<void>;
 }
 
 export function createPluginHostNavigation(
@@ -15,6 +16,9 @@ export function createPluginHostNavigation(
   owner: HostNavigationOwner,
 ): NonNullable<PluginSurfaceProps["navigation"]> {
   return {
+    appendToAgentDraft: owner.appendToAgentDraft
+      ? (input) => owner.appendToAgentDraft!({ ...input, serverId })
+      : undefined,
     openAgent: ({ agentId, serverId: targetServerId }) =>
       owner.openAgent({ serverId: targetServerId ?? serverId, agentId }),
     openWorkspace: ({ workspaceId, serverId: targetServerId }) =>

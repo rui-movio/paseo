@@ -612,6 +612,13 @@ server.before("agent.session_open", ({ request }) => {
 This runs on create, resume, refresh, and import. To inject only on creation, set `env` in an
 `agent.create` callback instead.
 
+Session opening hooks may also return `mcpServers` for interactive, non-internal agents.
+These entries merge into the provider launch configuration and are not saved in agent
+configuration or provider resume metadata. Use this for session capabilities that must
+be issued again after restart. Hooks cannot change agent/workspace identity, provider,
+directory, purpose, reason, or the internal flag. History and internal openings cannot
+receive launch MCP servers.
+
 ### Choose workspace isolation
 
 ```ts
@@ -770,11 +777,11 @@ type PluginTurnOutcome =
 
 ### Before hooks
 
-| Name                 | Request fields                                                          | Editable                                |
-| -------------------- | ----------------------------------------------------------------------- | --------------------------------------- |
-| `agent.create`       | `config`, optional `env`                                                | Public agent config except `cwd`; `env` |
-| `agent.session_open` | `agentId`, `workspaceId`, `provider`, `cwd`, `reason`, `purpose`, `env` | Only `env`                              |
-| `workspace.create`   | `source`, optional `title`, `firstAgentContext`                         | Entire explicit creation request        |
+| Name                 | Request fields                                                                                             | Editable                                |
+| -------------------- | ---------------------------------------------------------------------------------------------------------- | --------------------------------------- |
+| `agent.create`       | `config`, optional `env`                                                                                   | Public agent config except `cwd`; `env` |
+| `agent.session_open` | `agentId`, `workspaceId`, `provider`, `cwd`, `reason`, `purpose`, `internal`, `env`, optional `mcpServers` | `env` and launch-only `mcpServers`      |
+| `workspace.create`   | `source`, optional `title`, `firstAgentContext`                                                            | Entire explicit creation request        |
 
 **`agent.create.config`** uses `AgentSessionConfig`:
 
@@ -815,7 +822,7 @@ Creation request
   → agent.create hooks (plugin-ID order; registration order within each plugin)
   → resolve defaults and validate provider configuration
   → derive launch configuration with Paseo runtime tools and daemon prompt
-  → agent.session_open hooks (same ordering; env only)
+  → agent.session_open hooks (same ordering; env and launch MCP servers)
   → set PASEO_AGENT_ID and PASEO_AGENT_CWD
   → open provider session and save agent configuration
 ```

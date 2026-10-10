@@ -38,7 +38,9 @@ const beforeSchemas = {
       cwd: z.string(),
       reason: z.enum(["create", "resume", "refresh", "import"]),
       purpose: z.enum(["interactive", "history"]),
+      internal: z.boolean().optional(),
       env: z.record(z.string(), z.string()),
+      mcpServers: CreateAgentRequestMessageSchema.shape.config.shape.mcpServers,
     })
     .strict(),
   "workspace.create": WorkspaceCreateRequestSchema.omit({ type: true, requestId: true }).strict(),
@@ -145,9 +147,13 @@ export function validateBeforeResult<Name extends keyof PluginBeforeRequests>(
       previous.provider !== next.provider ||
       previous.cwd !== next.cwd ||
       previous.reason !== next.reason ||
-      previous.purpose !== next.purpose
+      previous.purpose !== next.purpose ||
+      previous.internal !== next.internal
     ) {
-      throw new Error("agent.session_open hooks can only change env");
+      throw new Error("agent.session_open hooks can only change env and launch MCP servers");
+    }
+    if ((next.purpose === "history" || next.internal) && next.mcpServers !== undefined) {
+      throw new Error("History-only and internal openings cannot add MCP servers");
     }
   }
   if (name === "agent.create") {
