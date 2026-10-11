@@ -6,6 +6,26 @@ export function useTaskStyles(c: Colors) {
     () =>
       StyleSheet.create({
         screen: { flex: 1, backgroundColor: c.surface0, minHeight: 0 },
+        hubHeader: {
+          flexDirection: "row",
+          flexWrap: "wrap",
+          alignItems: "center",
+          justifyContent: "space-between",
+          paddingHorizontal: 16,
+          paddingVertical: 8,
+          gap: 8,
+          borderBottomWidth: 1,
+          borderColor: c.border,
+        },
+        scopeBar: {
+          flexDirection: "row",
+          flexWrap: "wrap",
+          paddingHorizontal: 8,
+          paddingVertical: 8,
+          gap: 4,
+          borderBottomWidth: 1,
+          borderColor: c.border,
+        },
         panes: { flex: 1, flexDirection: "row", minHeight: 0 },
         queue: {
           width: 306,

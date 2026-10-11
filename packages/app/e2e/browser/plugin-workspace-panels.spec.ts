@@ -1,5 +1,5 @@
 import { pluginRequirements } from "../support/helpers/plugin-fixture";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { TestInfo } from "@playwright/test";
@@ -498,4 +498,125 @@ test.describe("plugin workspace panels and Command Center", () => {
       await rm(directory, { recursive: true, force: true });
     }
   });
+});
+
+test("opens the unified AI Employees UI beside a local agent and restores its DM draft", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(180_000);
+  const directory = await mkdtemp(path.join(tmpdir(), "paseo-employee-hub-e2e-"));
+  const id = "employee-hub-e2e";
+  const primary = await seedWorkspace({ repoPrefix: "employee-hub-e2e-" });
+  const configClient = await connectNewWorkspaceDaemonClient({ ownProjects: false });
+  const previous = await configClient.getDaemonConfig();
+  let fixtureAgentId: string | undefined;
+  try {
+    await cp(path.resolve(__dirname, "../../../../plugins/employee-dms"), directory, {
+      recursive: true,
+    });
+    await writeFile(
+      path.join(directory, "paseo-plugin.json"),
+      JSON.stringify({ id, requirements: pluginRequirements }),
+    );
+    await writeFile(
+      path.join(directory, "index.server.ts"),
+      `
+import * as tasks from "./shared/tasks";
+import { stateRpc } from "./shared/rooms";
+const room = { room: "fixture-room", aiEmployeeId: "fixture-employee", name: "Builder", after: 0, createdAt: "2026-10-10T00:00:00Z", activity: "", unread: 0, pending: false, ended: false, historyGap: false, messages: [{ id: "post-1", sender: "employee", text: "Fixture result ready for review", at: "2026-10-10T00:00:00Z", update: false, replyTo: null }] };
+export default function contribute(server) {
+  server.handle(tasks.directStateRpc, () => ({ employees: [], conversations: [room] }));
+  server.handle(tasks.directReadRpc, () => ({ ok: true }));
+  server.handle(tasks.tasksListRpc, () => ({ tasks: [], linearConfigured: true }));
+  server.handle(stateRpc, () => ({ employees: [], conversations: [] }));
+  return () => {};
+}`,
+    );
+    await configClient.patchDaemonConfig({ pluginsEnabled: true });
+    await configClient.installDirectoryPlugin(directory);
+    const agent = await primary.client.createAgent({
+      provider: "mock",
+      cwd: primary.repoPath,
+      workspaceId: primary.workspaceId,
+      title: "Local coding session",
+      model: "ten-second-stream",
+      modeId: "load-test",
+    });
+    fixtureAgentId = agent.id;
+    await page.setViewportSize(WIDE_VIEWPORT);
+    await gotoAppShell(page);
+    const entry = page.getByTestId(`plugin-sidebar-${id}-tasks-ai-employees`);
+    await expect(entry).toBeVisible();
+    await entry.click();
+    await expect(entry.getByText("AI Employees", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Open DM with Builder", exact: true }).click();
+    await page
+      .getByRole("textbox", { name: "Message Builder", exact: true })
+      .fill("Keep this employee draft");
+    await page.getByRole("button", { name: "Tasks", exact: true }).click();
+    await expect(
+      page.getByRole("button", { name: "Needs review filter", exact: true }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Conversations", exact: true }).click();
+    await expect(page.getByRole("textbox", { name: "Message Builder", exact: true })).toHaveValue(
+      "Keep this employee draft",
+    );
+    await capture(page, testInfo, "ai-employees-global");
+    await page.setViewportSize(COMPACT_VIEWPORT);
+    await openCompactSidebar(page);
+    await entry.click();
+    await expectMobileAgentSidebarHidden(page);
+    await expect(page.getByRole("textbox", { name: "Message Builder", exact: true })).toBeVisible();
+    await expect(page.getByRole("textbox", { name: "Message Builder", exact: true })).toHaveValue(
+      "Keep this employee draft",
+    );
+    await capture(page, testInfo, "ai-employees-mobile-web");
+    await page.setViewportSize(WIDE_VIEWPORT);
+    await entry.click();
+    await expect(
+      page.getByRole("button", { name: "Open beside local agent", exact: true }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Open beside local agent", exact: true }).click();
+    await page
+      .getByRole("button", { name: "Open beside Local coding session", exact: true })
+      .click();
+    await expect(
+      page.getByRole("textbox", { name: "Message agent...", exact: true }),
+    ).toBeVisible();
+    await expect(page.getByRole("textbox", { name: "Message Builder", exact: true })).toHaveValue(
+      "Keep this employee draft",
+    );
+    await expect(
+      page.locator('[data-testid^="workspace-pane-"]').filter({ visible: true }),
+    ).toHaveCount(2);
+    await capture(page, testInfo, "ai-employees-beside-local-agent");
+    await page.getByRole("button", { name: "Send to local agent", exact: true }).click();
+    await expect(page.getByRole("textbox", { name: "Message agent...", exact: true })).toHaveValue(
+      /Fixture result ready for review/,
+    );
+    await expect(page.getByRole("textbox", { name: "Message Builder", exact: true })).toHaveValue(
+      "Keep this employee draft",
+    );
+    await expect(
+      page.getByRole("button", { name: "Local agent history", exact: true }),
+    ).toBeVisible();
+    // The same tab restores after reload, without creating a second side pane.
+    await page.reload();
+    await expect(
+      page.getByRole("button", { name: "Local agent history", exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.locator('[data-testid^="workspace-pane-"]').filter({ visible: true }),
+    ).toHaveCount(2);
+    await primary.client.archiveAgent(agent.id);
+  } finally {
+    if (fixtureAgentId) await primary.client.archiveAgent(fixtureAgentId).catch(() => undefined);
+    await configClient.removePlugin(id).catch(() => undefined);
+    await configClient
+      .patchDaemonConfig({ pluginsEnabled: previous.config.pluginsEnabled ?? false })
+      .catch(() => undefined);
+    await configClient.close();
+    await primary.cleanup();
+    await rm(directory, { recursive: true, force: true });
+  }
 });

@@ -17,13 +17,13 @@ import { Action, Avatar } from "./conversations.js";
 import type { Colors } from "./appearance.js";
 import { Recipients, type Recipient } from "./recipients.js";
 import { useTaskStyles } from "./task-appearance.js";
-import { DirectMessages } from "./direct.js";
+import { quoteMessage } from "../shared/rooms.js";
+import { useHubState } from "./hub-state.js";
 
 export const views = [
   { id: "inbox", title: "Inbox", icon: "Inbox" },
-  { id: "tasks", title: "Assigned tasks", icon: "ListTodo" },
+  { id: "tasks", title: "Assigned", icon: "ListTodo" },
   { id: "review", title: "Needs review", icon: "CircleCheck" },
-  { id: "conversations", title: "Conversations", icon: "MessagesSquare" },
 ] as const;
 import { newMessageId } from "./message-id.js";
 export function includesTask(view: string, task: Task) {
@@ -38,20 +38,29 @@ const status = {
   paused: "Paused",
   done: "Completed",
 };
-export function TaskInbox(props: PluginScreenProps) {
-  if (props.params.view === "conversations") return <DirectMessages {...props} />;
-  return <TaskQueue key={`${props.host.id}:${props.params.view ?? "inbox"}`} {...props} />;
-}
-function TaskQueue(props: PluginScreenProps) {
+export function TaskQueue(
+  props: PluginScreenProps & {
+    view: string;
+    onFilter: (view: string) => void;
+    active: boolean;
+    agentId?: string;
+  },
+) {
   const colors = props.theme.colors;
   const styles = useTaskStyles(colors);
-  const [selected, select] = useState<string | null>(null);
+  const [selected, select] = useHubState<string | null>(props.host.id, "selected-task", null);
   const [importing, setImporting] = useState(false);
   const list = useRpc(rpc.tasksListRpc);
-  const view = props.params.view ?? "inbox";
+  const view = props.view;
+  const forwardToAgent = useMemo(() => {
+    const append = props.navigation?.appendToAgentDraft;
+    const agentId = props.agentId;
+    return append && agentId ? (quote: string) => append({ agentId, text: quote }) : undefined;
+  }, [props.navigation, props.agentId]);
   const query = useQuery({
     queryKey: ["employee-tasks", props.host.id],
     queryFn: () => list({}),
+    enabled: props.active,
     refetchInterval: 3000,
     retry: false,
   });
@@ -60,16 +69,19 @@ function TaskQueue(props: PluginScreenProps) {
   const title = views.find((item) => item.id === view)?.title ?? "Inbox";
   const openImport = useCallback(() => setImporting(true), []);
   const closeImport = useCallback(() => setImporting(false), []);
-  const imported = useCallback((task: Task) => {
-    select(task.id);
-    setImporting(false);
-  }, []);
-  const goBack = useCallback(() => select(null), []);
+  const imported = useCallback(
+    (task: Task) => {
+      select(task.id);
+      setImporting(false);
+    },
+    [select],
+  );
+  const goBack = useCallback(() => select(null), [select]);
   const reconnect = useCallback(() => {
     void query.refetch();
   }, [query]);
   const showList = !props.layout.compact || !selected;
-  const chooseTask = useCallback((task: Task) => select(task.id), []);
+  const chooseTask = useCallback((task: Task) => select(task.id), [select]);
   return (
     <View style={styles.screen}>
       {query.error && (
@@ -78,6 +90,23 @@ function TaskQueue(props: PluginScreenProps) {
           <Action colors={colors} label="Retry connection" icon="RotateCcw" onPress={reconnect} />
         </View>
       )}
+      <View style={styles.scopeBar}>
+        {views.map((filter) => (
+          <Choice
+            key={filter.id}
+            value={filter.id}
+            onChoose={props.onFilter}
+            label={`${filter.title} filter`}
+            selected={view === filter.id}
+            style={styles.tab}
+            selectedStyle={styles.selected}
+          >
+            <Text style={styles.small}>
+              {filter.title} · {tasks.filter((task) => includesTask(filter.id, task)).length}
+            </Text>
+          </Choice>
+        ))}
+      </View>
       <View style={styles.panes}>
         {showList && (
           <View style={props.layout.compact ? styles.compactQueue : styles.queue}>
@@ -165,7 +194,9 @@ function TaskQueue(props: PluginScreenProps) {
               host={props.host.id}
               colors={colors}
               compact={props.layout.compact}
+              active={props.active}
               onBack={goBack}
+              onForward={forwardToAgent}
             />
           ) : (
             <View style={styles.empty}>
@@ -331,19 +362,27 @@ function TaskDetail({
   colors,
   compact,
   onBack,
+  active,
+  onForward,
 }: {
   id: string;
   host: string;
   colors: Colors;
   compact: boolean;
+  active: boolean;
   onBack: () => void;
+  onForward?: (text: string) => Promise<void>;
 }) {
   const styles = useTaskStyles(colors);
   const [tab, setTab] = useState("conversation");
   const [assigning, setAssigning] = useState(false);
   const [completing, setCompleting] = useState(false);
-  const [text, edit] = useState("");
-  const [draftId, setDraftId] = useState(newMessageId);
+  const [text, edit] = useHubState(host, `task-draft:${id}`, "");
+  const [draftId, setDraftId] = useHubState<string | undefined>(
+    host,
+    `task-draft-id:${id}`,
+    undefined,
+  );
   const detail = useRpc(rpc.detailTaskRpc);
   const send = useRpc(rpc.sendTaskRpc);
   const retry = useRpc(rpc.retryTaskRpc);
@@ -361,12 +400,13 @@ function TaskDetail({
   const query = useQuery({
     queryKey: key,
     queryFn: () => detail({ taskId: id }),
+    enabled: active,
     refetchInterval: 3000,
     retry: false,
   });
   const mutation = useMutation({
     mutationFn: (action: "send" | "retry" | "resume" | "refresh") => {
-      if (action === "send") return send({ taskId: id, text, id: draftId });
+      if (action === "send") return send({ taskId: id, text, id: draftId ?? newMessageId() });
       if (action === "retry") return retry({ taskId: id });
       if (action === "resume") return resume({ taskId: id });
       return refreshIssue({ taskId: id });
@@ -399,14 +439,24 @@ function TaskDetail({
   const resumeConversation = useCallback(() => mutation.mutate("resume"), [mutation]);
   const refreshSource = useCallback(() => mutation.mutate("refresh"), [mutation]);
   const sendFollowup = useCallback(() => mutation.mutate("send"), [mutation]);
-  const editFollowup = useCallback((value: string) => {
-    edit(value);
-    setDraftId(newMessageId());
-  }, []);
+  const editFollowup = useCallback(
+    (value: string) => {
+      edit(value);
+      setDraftId(newMessageId());
+    },
+    [edit, setDraftId],
+  );
   const openLinear = useCallback(() => {
     if (task)
       void openExternalUrl(task.issue.url).catch((error: Error) => toast.error(error.message));
   }, [task, toast]);
+  const forwarding = useMutation({
+    mutationFn: (quote: string) => onForward!(quote),
+    onSuccess: () =>
+      toast.show("Quote added to the local agent’s draft. Review it before sending."),
+    onError: (error: Error) => toast.error(error.message),
+  });
+  const forwardReply = useCallback((quote: string) => forwarding.mutate(quote), [forwarding]);
   if (!task)
     return (
       <View style={styles.empty}>
@@ -513,6 +563,8 @@ function TaskDetail({
             onAssign={startAssignment}
             onComplete={startCompletion}
             onResume={resumeConversation}
+            onForward={onForward ? forwardReply : undefined}
+            forwarding={forwarding.isPending}
           />
         )}
       </ScrollView>
@@ -746,7 +798,7 @@ function CompleteTask({
         </Text>
         <Text style={styles.muted}>
           Complete this after checking the employee’s result. The conversation remains available in
-          Assigned tasks.
+          Assigned.
         </Text>
         <Pressable
           accessibilityRole="checkbox"
@@ -814,6 +866,8 @@ function TaskTranscript({
   onAssign,
   onComplete,
   onResume,
+  onForward,
+  forwarding,
 }: {
   task: Task;
   conversation?: import("./appearance.js").Conversation;
@@ -822,6 +876,8 @@ function TaskTranscript({
   onAssign: () => void;
   onComplete: () => void;
   onResume: () => void;
+  onForward?: (text: string) => void;
+  forwarding: boolean;
 }) {
   const styles = useTaskStyles(colors);
   return (
@@ -871,6 +927,15 @@ function TaskTranscript({
                 ? `Assigned ${task.issue.identifier}\n\n${task.assignment.instructions}`
                 : message.text}
             </Text>
+            {message.sender === "employee" && onForward && (
+              <TaskReplyAction
+                colors={colors}
+                name={task.assignment?.name ?? "Employee"}
+                message={message}
+                forwarding={forwarding}
+                onForward={onForward}
+              />
+            )}
             {message.delivery === "unconfirmed" && (
               <Text style={styles.small}>Delivery unconfirmed · Retry preserves this request</Text>
             )}
@@ -972,5 +1037,33 @@ function needsRetry(task: Task) {
 function showComposer(task: Task, tab: string) {
   return (
     tab === "conversation" && task.assignment && task.state !== "done" && task.state !== "paused"
+  );
+}
+
+function TaskReplyAction({
+  colors,
+  name,
+  message,
+  forwarding,
+  onForward,
+}: {
+  colors: Colors;
+  name: string;
+  message: import("../shared/rooms.js").Message;
+  forwarding: boolean;
+  onForward: (text: string) => void;
+}) {
+  const send = useCallback(
+    () => onForward(quoteMessage(name, message)),
+    [name, message, onForward],
+  );
+  return (
+    <Action
+      colors={colors}
+      label="Send to local agent"
+      icon="CornerUpLeft"
+      disabled={forwarding}
+      onPress={send}
+    />
   );
 }

@@ -287,6 +287,31 @@ describe("PluginRuntime", () => {
               ],
             }),
           );
+        else if (pathname.endsWith("/history"))
+          response.end(
+            JSON.stringify({
+              room: {
+                room: "r_test",
+                aiEmployeeId: "emp-1",
+                name: "Jerry",
+                after: 1,
+                createdAt: "2026-10-09T12:00:00Z",
+                started: true,
+              },
+              messages: [
+                {
+                  id: "post_retained",
+                  sender: "employee",
+                  text: "Retained update",
+                  at: "2026-10-09T12:01:00Z",
+                  update: true,
+                  replyTo: null,
+                },
+              ],
+              pendingId: null,
+              pendingSince: 0,
+            }),
+          );
         else
           response.end(
             JSON.stringify({
@@ -304,7 +329,7 @@ describe("PluginRuntime", () => {
       const helper = path.join(directory, "hg-connect");
       await writeFile(
         helper,
-        `#!/bin/sh\nprintf '%s\\n' '{"baseUrl":"http://127.0.0.1:${address.port}","token":"test-session-capability"}'\n`,
+        `#!/bin/sh\nprintf '%s\\n' '{"baseUrl":"http://127.0.0.1:${address.port}","token":"test-session-capability","features":["history","resume"]}'\n`,
       );
       await chmod(helper, 0o700);
       vi.stubEnv("HG_CONNECT_BIN", helper);
@@ -347,6 +372,7 @@ describe("PluginRuntime", () => {
         expect(listed.result.tools.map((tool: { name: string }) => tool.name)).toEqual([
           "ask_employee",
           "read_room",
+          "resume_employee",
         ]);
         const read = await rpc("tools/call", {
           name: "read_room",

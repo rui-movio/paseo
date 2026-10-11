@@ -1626,6 +1626,12 @@ export default function contribute(client: PluginClientContext) {
 }
 ```
 
+`openPanel(id, { placement: "beside" })` places the tab in the reusable ordinary
+side pane on desktop/web. Agent panels reveal their local agent in a main pane first.
+Compact and native layouts open a normal tab. `placement: "beside"` requires
+`location: "workspace"` (the default); combining it with Explorer is rejected.
+The same option is accepted by `client.openPanel(id, { workspaceId, agentId?, placement })`.
+
 `addWorkspacePanel` fields:
 
 | Field       | Required | Meaning                                                       |
@@ -1729,15 +1735,15 @@ Global items appear on the installation's selected host. Workspace items appear 
 
 Every callback receives:
 
-| Field                     | Context             | Meaning                                                                                                         |
-| ------------------------- | ------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `context`                 | All                 | Matching discriminator.                                                                                         |
-| `paseo`                   | All                 | Selected host's existing `PaseoApi`.                                                                            |
-| `rpc(contract, input)`    | All                 | Typed call to this installation's daemon-side plugin handler.                                                   |
-| `openScreen(input)`       | All                 | Opens one of this plugin's registered screens: `{ screenId, params? }`.                                         |
-| `workspace`               | Workspace and agent | Synchronous workspace snapshot.                                                                                 |
-| `agent`                   | Agent               | Synchronous matching agent snapshot.                                                                            |
-| `openPanel(id, options?)` | Workspace and agent | Opens a registered panel in the callback's current context. Pass `{ location: "explorer" }` to target Explorer. |
+| Field                     | Context             | Meaning                                                                                                                                                                                                               |
+| ------------------------- | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `context`                 | All                 | Matching discriminator.                                                                                                                                                                                               |
+| `paseo`                   | All                 | Selected host's existing `PaseoApi`.                                                                                                                                                                                  |
+| `rpc(contract, input)`    | All                 | Typed call to this installation's daemon-side plugin handler.                                                                                                                                                         |
+| `openScreen(input)`       | All                 | Opens one of this plugin's registered screens: `{ screenId, params? }`.                                                                                                                                               |
+| `workspace`               | Workspace and agent | Synchronous workspace snapshot.                                                                                                                                                                                       |
+| `agent`                   | Agent               | Synchronous matching agent snapshot.                                                                                                                                                                                  |
+| `openPanel(id, options?)` | Workspace and agent | Opens a registered panel in the callback's current context. Pass `{ location: "explorer" }` to target Explorer, or `{ placement: "beside" }` to explicitly place a workspace panel in the reusable desktop side pane. |
 
 An agent callback may open either an agent panel or a workspace panel. A workspace callback may open only a workspace panel. Unknown screen and panel IDs fail visibly. Use `paseo` for normal workspace, agent, provider, and daemon-config operations. Use `rpc` for plugin-specific filesystem, credential, vendor, or daemon-local work.
 

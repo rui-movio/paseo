@@ -101,6 +101,8 @@ export interface PluginIconProps {
 export type PluginPanelLocation = "workspace" | "explorer";
 
 export interface PluginOpenPanelOptions {
+  /** Explicitly place a workspace panel in the reusable side pane on desktop. */
+  placement?: "beside";
   location?: PluginPanelLocation;
 }
 

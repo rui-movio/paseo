@@ -1,9 +1,16 @@
 import appPackage from "../../../package.json";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { pluginRegistry } from "../registry";
 import { panelTargetSupportsHost, resolvePluginPanelOpenLocation } from "./locations";
 
+import { navigateToWorkspace } from "@/stores/navigation-active-workspace-store";
+import { collectAllPanes, useWorkspaceLayoutStore } from "@/stores/workspace-layout-store";
+vi.mock("@/stores/navigation-active-workspace-store", () => ({ navigateToWorkspace: vi.fn() }));
+vi.mock("@/constants/layout", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/constants/layout")>()),
+  supportsDesktopPaneSplits: () => true,
+}));
 const audio = { play: async () => 0 };
 
 vi.mock("../navigation", () => ({
@@ -71,5 +78,63 @@ describe("plugin workspace panel locations", () => {
       "does not support explorer location",
     );
     pluginRegistry.removeHost("host-1");
+  });
+});
+
+describe("plugin explicit side placement", () => {
+  beforeEach(() => {
+    vi.mocked(navigateToWorkspace).mockClear();
+  });
+  it("reuses one ordinary side pane while retaining the local agent on the main pane", async () => {
+    const { createPluginNavigation } =
+      await vi.importActual<typeof import("../navigation")>("../navigation");
+    const key = "host-1:side-workspace";
+    const store = useWorkspaceLayoutStore.getState();
+    store.purgeWorkspace(key);
+    store.openTab({
+      workspaceKey: key,
+      target: { kind: "agent", agentId: "local" },
+      intent: "reveal",
+    });
+    const navigation = createPluginNavigation({
+      serverId: "host-1",
+      workspaceId: "side-workspace",
+    });
+    navigation.openAgentPanel("employees", "conversations", "local", "workspace", "beside");
+    const side = useWorkspaceLayoutStore.getState().sidePaneIdByWorkspace[key];
+    const first = vi.mocked(navigateToWorkspace).mock.calls;
+    expect(first[0]![0]).toMatchObject({
+      target: { kind: "agent", agentId: "local" },
+      placement: { mode: "pane" },
+    });
+    expect(first[0]![0].placement).not.toEqual({ mode: "pane", paneId: side });
+    expect(first[1]![0]).toMatchObject({
+      target: {
+        kind: "plugin",
+        pluginId: "employees",
+        panelId: "conversations",
+        context: "agent",
+        agentId: "local",
+      },
+      placement: { mode: "pane", paneId: side },
+    });
+    navigation.openAgentPanel("employees", "conversations", "local", "workspace", "beside");
+    expect(useWorkspaceLayoutStore.getState().sidePaneIdByWorkspace[key]).toBe(side);
+    expect(
+      collectAllPanes(useWorkspaceLayoutStore.getState().layoutByWorkspace[key]!.root),
+    ).toHaveLength(2);
+    store.purgeWorkspace(key);
+  });
+  it("rejects Explorer/side ambiguity before opening or moving the local agent", async () => {
+    const { createPluginNavigation } =
+      await vi.importActual<typeof import("../navigation")>("../navigation");
+    const navigation = createPluginNavigation({
+      serverId: "host-1",
+      workspaceId: "side-workspace",
+    });
+    expect(() =>
+      navigation.openAgentPanel("employees", "conversations", "local", "explorer", "beside"),
+    ).toThrow("Side placement requires a workspace panel");
+    expect(navigateToWorkspace).not.toHaveBeenCalled();
   });
 });

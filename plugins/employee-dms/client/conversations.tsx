@@ -665,7 +665,7 @@ function MessageRow({
           <View style={styles.messageActions}>
             <Action
               colors={colors}
-              label="Send to agent"
+              label="Send to local agent"
               icon="ArrowUpRight"
               disabled={forwarding}
               onPress={forward}
