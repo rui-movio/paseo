@@ -522,10 +522,19 @@ test("opens the unified AI Employees UI beside a local agent and restores its DM
       path.join(directory, "index.server.ts"),
       `
 import * as tasks from "./shared/tasks";
+import * as threads from "./shared/threads";
 import { stateRpc } from "./shared/rooms";
 import { defineRpc } from "@getpaseo/plugin";
 import { z } from "zod";
 const room = { room: "fixture-room", aiEmployeeId: "fixture-employee", name: "Builder", paused: true, after: 0, createdAt: "2026-10-10T00:00:00Z", activity: "", unread: 0, pending: false, ended: false, historyGap: false, messages: Array.from({length: 30}, (_, index) => ({ id: "post-" + index, sender: "employee", text: "Saved message " + index + ": " + "Long saved history for testing chat scrolling. ".repeat(8), at: "2026-10-10T00:00:00Z", update: false, replyTo: null })) };
+const dm = {id: "fixture-dm", employee: "fixture-employee", name: "Builder"};
+const thread = {id: "fixture-thread", dmId: dm.id, createdAt: room.createdAt, root: room.messages[0], phase: "sent", legacy: true, room: room.room, replyCount: room.messages.length - 1, pending: false, paused: true, ended: false};
+const source = {agentId: "fixture-source", workspaceId: "fixture-workspace", title: "Local coding session", project: "paseo", provider: "claude"};
+const agentRoot = {id: "m_1111111111111111", sender: "agent", text: "Review PR #2143 and check retry behavior.", at: "2026-10-10T00:00:00Z", update: false, replyTo: null};
+const agentThread = {...thread, id: "fixture-agent-thread", legacy: false, paused: false, origin: source, root: agentRoot, returnedMessageId: "review-answer", replyCount: 1};
+const records = [thread, agentThread];
+const roomMap = new Map([[thread.id, room], [agentThread.id, {...room, paused: false, messages: [agentRoot, {...agentRoot, id: "review-answer", sender: "employee", text: "Keep the original request ID when retrying. Add a test for a dropped acknowledgement.", replyTo: agentRoot.id}]}]]);
+function currentThread(id) { const item = records.find(t => t.id === id); if (!item) throw new Error("Unknown thread"); return {...item, replyCount: roomMap.get(id).messages.length - 1}; }
 const taskRoom = {...room, room: "fixture-task-room", messages: [...room.messages]};
 const task = {id: "11111111-1111-4111-8111-111111111111", issue: {id: "22222222-2222-4222-8222-222222222222", identifier: "ENG-42", title: "Fixture scrolling task", description: null, url: "https://linear.app/heygen/issue/ENG-42/fixture", team: {id: "eng", key: "ENG", name: "Engineering"}, organization: {id: "org", name: "Fixture"}, state: {id: "todo", name: "Todo", type: "unstarted"}}, state: "review", createdAt: "2026-10-10", updatedAt: "2026-10-10", events: [], room: taskRoom.room, assignment: {employee: "fixture-employee", name: "Builder", instructions: "Test scrolling", messageId: "m_aaaaaaaaaaaaaaaa", text: "Saved request"}, pending: {id: "m_aaaaaaaaaaaaaaaa", text: "Saved request", phase: "sent", replyReceived: true}};
 const incoming = defineRpc({name: "fixture.incoming", input: z.object({text: z.string(), task: z.boolean().optional()}), output: z.object({ok: z.literal(true)})});
@@ -533,7 +542,12 @@ function append(target, sender, text, id) {
   target.messages.push({id: id ?? "fixture-" + target.messages.length, sender, text, at: "2026-10-10T00:01:00Z", update: false, replyTo: null});
 }
 export default function contribute(server) {
-  server.handle(tasks.directStateRpc, () => ({ employees: [], conversations: [room] }));
+  const bind = defineRpc({name: "fixture.source", input: z.object({agentId: z.string(), workspaceId: z.string()}), output: z.object({ok: z.literal(true)})});
+  server.handle(bind, input => {Object.assign(source, input); return {ok: true};});
+  server.handle(threads.dmStateRpc, () => ({ employees: [], dms: [dm], threads: records.map(t => currentThread(t.id)) }));
+  server.handle(threads.threadDetailRpc, input => ({thread: currentThread(input.thread), conversation: roomMap.get(input.thread)}));
+  server.handle(threads.threadStartRpc, input => { const root = {id: input.id, sender: "you", text: input.text, at: "2026-10-10T00:01:00Z", update: false, replyTo: null}; const next = {...thread, id: input.id, root, legacy: false, paused: false, replyCount: 0}; records.push(next); roomMap.set(next.id, {...room, room: "room-"+next.id, paused: false, messages: [root]}); return next; });
+  server.handle(threads.threadSendRpc, input => {const target = roomMap.get(input.thread); append(target, "you", input.text, input.id); target.paused = false; return currentThread(input.thread);});
   server.handle(tasks.directReadRpc, () => ({ ok: true }));
   server.handle(tasks.directSendRpc, input => {append(room, "you", input.text, input.id); room.paused = false; return {id: input.id};});
   server.handle(incoming, input => {append(input.task ? taskRoom : room, "employee", input.text); return {ok: true};});
@@ -555,6 +569,10 @@ export default function contribute(server) {
       modeId: "load-test",
     });
     fixtureAgentId = agent.id;
+    await configClient.invokePluginRpc(id, "fixture.source", {
+      agentId: agent.id,
+      workspaceId: primary.workspaceId,
+    });
     await page.setViewportSize(WIDE_VIEWPORT);
     await gotoAppShell(page);
     const entry = page.getByTestId(`plugin-sidebar-${id}-tasks-ai-employees`);
@@ -562,6 +580,31 @@ export default function contribute(server) {
     await entry.click();
     await expect(entry.getByText("AI Employees", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Open DM with Builder", exact: true }).click();
+    await page
+      .getByRole("textbox", { name: "Message Builder", exact: true })
+      .fill("A separate DM ask");
+    await page.getByRole("textbox", { name: "Message Builder", exact: true }).press("Enter");
+    await expect(
+      page
+        .getByLabel("Conversation messages", { exact: true })
+        .getByText("A separate DM ask", { exact: true }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Back to DM", exact: true }).click();
+    await expect(
+      page.getByRole("button", { name: "Open DM with Builder", exact: true }),
+    ).toHaveCount(1);
+    await page
+      .getByRole("button", { name: "Open thread fixture-agent-thread", exact: true })
+      .click();
+    await expect(
+      page.getByText("Started by Claude · Local coding session in paseo", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByText("Reply returned to Claude in Local coding session", { exact: true }),
+    ).toBeVisible();
+    await capture(page, testInfo, "ai-employees-dm-thread");
+    await page.getByRole("button", { name: "Back to DM", exact: true }).click();
+    await page.getByRole("button", { name: "Open thread fixture-thread", exact: true }).click();
     const transcript = page.getByLabel("Conversation messages", { exact: true });
     const bottomDistance = () =>
       transcript.evaluate(
@@ -583,9 +626,9 @@ export default function contribute(server) {
       .poll(() => transcript.evaluate((element) => element.scrollTop))
       .toBeLessThanOrEqual(2);
     await page
-      .getByRole("textbox", { name: "Message Builder", exact: true })
+      .getByRole("textbox", { name: "Reply to Builder", exact: true })
       .fill("Send from earlier history");
-    await page.getByRole("button", { name: "Send message", exact: true }).click();
+    await page.getByRole("button", { name: "Reply in thread", exact: true }).click();
     await expect(page.getByText("Send from earlier history", { exact: true })).toBeAttached();
     await expect.poll(bottomDistance).toBeLessThanOrEqual(2);
     const longReply =
@@ -599,7 +642,7 @@ export default function contribute(server) {
     await page.getByRole("button", { name: "Jump to latest", exact: true }).click();
     await expect.poll(bottomDistance).toBeLessThanOrEqual(2);
     await page
-      .getByRole("textbox", { name: "Message Builder", exact: true })
+      .getByRole("textbox", { name: "Reply to Builder", exact: true })
       .fill("Keep this employee draft");
     await page.getByRole("button", { name: "Tasks", exact: true }).click();
     await expect(
@@ -638,7 +681,7 @@ export default function contribute(server) {
     await expect(page.getByText("Latest task reply " + longReply, { exact: true })).toBeAttached();
     await expect.poll(taskBottomDistance).toBeLessThanOrEqual(2);
     await page.getByRole("button", { name: "Conversations", exact: true }).click();
-    await expect(page.getByRole("textbox", { name: "Message Builder", exact: true })).toHaveValue(
+    await expect(page.getByRole("textbox", { name: "Reply to Builder", exact: true })).toHaveValue(
       "Keep this employee draft",
     );
     await expect(
@@ -649,8 +692,10 @@ export default function contribute(server) {
     await openCompactSidebar(page);
     await entry.click();
     await expectMobileAgentSidebarHidden(page);
-    await expect(page.getByRole("textbox", { name: "Message Builder", exact: true })).toBeVisible();
-    await expect(page.getByRole("textbox", { name: "Message Builder", exact: true })).toHaveValue(
+    await expect(
+      page.getByRole("textbox", { name: "Reply to Builder", exact: true }),
+    ).toBeVisible();
+    await expect(page.getByRole("textbox", { name: "Reply to Builder", exact: true })).toHaveValue(
       "Keep this employee draft",
     );
     await expect.poll(bottomDistance).toBeLessThanOrEqual(2);
@@ -667,7 +712,7 @@ export default function contribute(server) {
     await expect(
       page.getByRole("textbox", { name: "Message agent...", exact: true }),
     ).toBeVisible();
-    await expect(page.getByRole("textbox", { name: "Message Builder", exact: true })).toHaveValue(
+    await expect(page.getByRole("textbox", { name: "Reply to Builder", exact: true })).toHaveValue(
       "Keep this employee draft",
     );
     await expect(
@@ -680,7 +725,7 @@ export default function contribute(server) {
     await expect(page.getByRole("textbox", { name: "Message agent...", exact: true })).toHaveValue(
       "",
     );
-    await expect(page.getByRole("textbox", { name: "Message Builder", exact: true })).toHaveValue(
+    await expect(page.getByRole("textbox", { name: "Reply to Builder", exact: true })).toHaveValue(
       "Keep this employee draft",
     );
     await expect(

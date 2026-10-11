@@ -416,6 +416,11 @@ export interface DetailProps {
   onAgent?: () => void;
   newId: () => string;
   standalone?: boolean;
+  composerLabel?: string;
+  composerPlaceholder?: string;
+  sendLabel?: string;
+  composerHint?: string;
+  blocked?: boolean;
 }
 export function Detail(props: DetailProps) {
   const { room, colors } = props;
@@ -611,13 +616,14 @@ function senderLabel(message: Message, name: string): string {
   if (message.sender === "employee") return name;
   return message.sender === "agent" ? "Local agent" : "You";
 }
-function MessageRow({
+export function MessageRow({
   colors,
   name,
   message,
   onRetry,
   roomId,
   retryDisabled,
+  agentLabel,
 }: {
   colors: Colors;
   name: string;
@@ -625,17 +631,22 @@ function MessageRow({
   onRetry: DetailProps["onRetry"];
   roomId: string;
   retryDisabled: boolean;
+  agentLabel?: string;
 }) {
   const styles = useStyles(colors);
   const retry = useCallback(
     () => onRetry({ room: roomId, text: message.text, id: message.id }),
     [onRetry, roomId, message],
   );
-  const author = senderLabel(message, name);
+  const author = message.sender === "agent" && agentLabel ? agentLabel : senderLabel(message, name);
   const time = new Date(message.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   return (
     <View style={styles.message}>
-      <Avatar colors={colors} name={author} size={31} />
+      <Avatar
+        colors={colors}
+        name={message.sender === "agent" ? "Local agent" : author}
+        size={31}
+      />
       <View style={styles.messageContent}>
         <View style={styles.messageMeta}>
           <Text style={styles.author}>{author}</Text>
@@ -662,14 +673,14 @@ function MessageRow({
     </View>
   );
 }
-function Composer({ detail }: { detail: DetailProps }) {
+export function Composer({ detail }: { detail: DetailProps }) {
   const styles = useStyles(detail.colors);
   const keyboardHint = Platform.select({
     web: "Enter to send · Shift+Enter for newline",
     default: undefined,
   });
   const edit = useCallback((text: string) => detail.onEdit(detail.room.room, text), [detail]);
-  const disabled = !detail.text.trim() || detail.sending || detail.room.pending;
+  const disabled = !detail.text.trim() || detail.sending || detail.room.pending || detail.blocked;
   const send = useCallback(() => {
     if (disabled) return;
     detail.onSend({
@@ -697,15 +708,15 @@ function Composer({ detail }: { detail: DetailProps }) {
     <View style={styles.composerFrame}>
       <View style={styles.composer}>
         <TextInput
-          accessibilityLabel={`Message ${detail.room.name}`}
+          accessibilityLabel={detail.composerLabel ?? `Message ${detail.room.name}`}
           multiline
           value={detail.text}
-          placeholder={`Message ${detail.room.name}…`}
+          placeholder={detail.composerPlaceholder ?? `Message ${detail.room.name}…`}
           placeholderTextColor={detail.colors.foregroundMuted}
           style={styles.input}
           onChangeText={edit}
           onKeyPress={Platform.select({ web: keyPress, default: undefined })}
-          editable={!detail.sending}
+          editable={!detail.sending && !detail.blocked}
         />
         <View style={styles.composerFooter}>
           <View style={styles.composerIdentity}>
@@ -714,15 +725,18 @@ function Composer({ detail }: { detail: DetailProps }) {
           </View>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="Send message"
+            accessibilityLabel={detail.sendLabel === "Reply" ? "Reply in thread" : "Send message"}
             disabled={disabled}
             style={sendStyle}
             onPress={send}
           >
-            <Text style={styles.sendLabel}>{detail.sending ? "Sending…" : "Send"}</Text>
+            <Text style={styles.sendLabel}>
+              {detail.sending ? "Sending…" : (detail.sendLabel ?? "Send")}
+            </Text>
             <Icon name="ArrowUp" size={13} color={detail.colors.accentForeground} />
           </Pressable>
         </View>
+        {detail.composerHint && <Text style={styles.keyboardHint}>{detail.composerHint}</Text>}
         {keyboardHint && <Text style={styles.keyboardHint}>{keyboardHint}</Text>}
       </View>
     </View>

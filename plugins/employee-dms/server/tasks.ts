@@ -156,6 +156,9 @@ export class TaskService {
   async targets(employee: string) {
     return { targets: await this.directory.targets(employee) };
   }
+  async owner() {
+    return (await this.account()).owner;
+  }
   async direct() {
     const account = await this.account();
     return this.rooms(account, "direct");
@@ -418,8 +421,7 @@ export class TaskService {
   }
 }
 
-export function registerTasks(server: PluginServerContext) {
-  const service = new TaskService();
+export function registerTasks(server: PluginServerContext, service = new TaskService()) {
   server.handle(contracts.tasksListRpc, () => service.list());
   server.handle(contracts.issuesSearchRpc, async (input) => ({
     issues: await service.search(input),

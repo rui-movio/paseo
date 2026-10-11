@@ -281,8 +281,24 @@ describe("AI Employees hub", () => {
   };
   function seed() {
     fixtures.calls.set(
-      "employees.direct.state",
-      vi.fn(async () => ({ employees: [], conversations: [room] })),
+      "employees.dm.state",
+      vi.fn(async () => ({
+        employees: [],
+        dms: [{ id: "dm", employee: "emp", name: "Jerry" }],
+        threads: [
+          {
+            id: "thread",
+            dmId: "dm",
+            createdAt: room.createdAt,
+            root: { ...room.messages[0], replyTo: null },
+            phase: "sent",
+            replyCount: 0,
+            pending: false,
+            paused: false,
+            ended: false,
+          },
+        ],
+      })),
     );
     fixtures.calls.set(
       "employees.direct.read",
@@ -382,3 +398,130 @@ function shareNavigation(
 ) {
   return { appendToAgentDraft: append, openAgent: open, openWorkspace: open };
 }
+
+describe("Employee DM thread UI", () => {
+  const dm = { id: "thread-ui-dm", employee: "emp", name: "Jerry" };
+  const root = {
+    id: "m_1111111111111111",
+    sender: "agent" as const,
+    text: "Please review PR #2143",
+    at: "2026-10-10T23:00:00Z",
+    update: false,
+    replyTo: null,
+  };
+  const origin = {
+    agentId: "local",
+    workspaceId: "genesis",
+    title: "hello",
+    project: "genesis",
+    provider: "claude",
+  };
+  const thread = {
+    id: root.id,
+    dmId: dm.id,
+    root,
+    origin,
+    room: "employee-room",
+    phase: "sent" as const,
+    createdAt: root.at,
+    replyCount: 1,
+    pending: false,
+    paused: false,
+    ended: false,
+  };
+  function seed() {
+    fixtures.calls.set(
+      "employees.dm.state",
+      vi.fn(async () => ({ dms: [dm], threads: [thread], employees: [] })),
+    );
+    fixtures.calls.set(
+      "employees.dm.thread.detail",
+      vi.fn(async () => ({
+        thread,
+        conversation: {
+          room: thread.room,
+          aiEmployeeId: "emp",
+          name: "Jerry",
+          after: 1,
+          createdAt: root.at,
+          pending: false,
+          paused: false,
+          ended: false,
+          historyGap: false,
+          unread: 0,
+          activity: "",
+          messages: [
+            root,
+            {
+              ...root,
+              id: "answer",
+              sender: "employee",
+              text: "Keep the original retry ID",
+              replyTo: root.id,
+            },
+          ],
+        },
+      })),
+    );
+  }
+  it("keeps new-ask and reply drafts separate and routes a human join to the selected thread", async () => {
+    seed();
+    const reply = vi.fn(async () => thread);
+    fixtures.calls.set("employees.dm.thread.send", reply);
+    const screen = mount(<EmployeeHub {...props(true)} params={emptyParams} />);
+    fireEvent.click(await screen.findByLabelText("Open DM with Jerry"));
+    fireEvent.change(await screen.findByLabelText("Message Jerry"), {
+      target: { value: "Keep my next ask" },
+    });
+    fireEvent.click(screen.getByLabelText(`Open thread ${thread.id}`));
+    expect(await screen.findByText("Started by Claude · hello in genesis")).toBeTruthy();
+    await screen.findByText("Keep the original retry ID");
+    fireEvent.change(screen.getByLabelText("Reply to Jerry"), {
+      target: { value: "I’ll add that test" },
+    });
+    fireEvent.click(screen.getByLabelText("Back to DM"));
+    expect(((await screen.findByLabelText("Message Jerry")) as HTMLTextAreaElement).value).toBe(
+      "Keep my next ask",
+    );
+    fireEvent.click(screen.getByLabelText(`Open thread ${thread.id}`));
+    expect(((await screen.findByLabelText("Reply to Jerry")) as HTMLTextAreaElement).value).toBe(
+      "I’ll add that test",
+    );
+    fireEvent.click(screen.getByLabelText("Reply in thread"));
+    await waitFor(() =>
+      expect(reply).toHaveBeenCalledWith({
+        thread: thread.id,
+        text: "I’ll add that test",
+        id: expect.stringMatching(/^m_/),
+      }),
+    );
+    expect(fixtures.calls.has("employees.dm.thread.start")).toBe(false);
+    expect(fixtures.calls.has("employees.direct.send")).toBe(false);
+  });
+  it("starts a new thread from the main composer without sending into the previous room", async () => {
+    seed();
+    const start = vi.fn(async (input: { id: string }) => ({
+      ...thread,
+      id: input.id,
+      origin: undefined,
+    }));
+    fixtures.calls.set("employees.dm.thread.start", start);
+    const screen = mount(<EmployeeHub {...props(true)} params={emptyParams} />);
+    fireEvent.click(await screen.findByLabelText("Open DM with Jerry"));
+    fireEvent.change(await screen.findByLabelText("Message Jerry"), {
+      target: { value: "A separate ask" },
+    });
+    await waitFor(() =>
+      expect((screen.getByLabelText("Send message") as HTMLButtonElement).disabled).toBe(false),
+    );
+    fireEvent.click(screen.getByLabelText("Send message"));
+    await waitFor(() =>
+      expect(start).toHaveBeenCalledWith({
+        dmId: dm.id,
+        text: "A separate ask",
+        id: expect.stringMatching(/^m_/),
+      }),
+    );
+    expect(fixtures.calls.has("employees.dm.thread.send")).toBe(false);
+  });
+});
