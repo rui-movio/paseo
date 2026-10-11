@@ -377,7 +377,6 @@ function TaskDetail({
   const detail = useRpc(rpc.detailTaskRpc);
   const send = useRpc(rpc.sendTaskRpc);
   const retry = useRpc(rpc.retryTaskRpc);
-  const resume = useRpc(rpc.resumeTaskRpc);
   const refreshIssue = useRpc(rpc.issueRefreshRpc);
   const cache = useQueryClient();
   const toast = useToast();
@@ -396,10 +395,9 @@ function TaskDetail({
     retry: false,
   });
   const mutation = useMutation({
-    mutationFn: (action: "send" | "retry" | "resume" | "refresh") => {
+    mutationFn: (action: "send" | "retry" | "refresh") => {
       if (action === "send") return send({ taskId: id, text, id: draftId ?? newMessageId() });
       if (action === "retry") return retry({ taskId: id });
-      if (action === "resume") return resume({ taskId: id });
       return refreshIssue({ taskId: id });
     },
     onSuccess: async (task, action) => {
@@ -427,7 +425,6 @@ function TaskDetail({
     void refresh();
   }, [refresh]);
   const retryDelivery = useCallback(() => mutation.mutate("retry"), [mutation]);
-  const resumeConversation = useCallback(() => mutation.mutate("resume"), [mutation]);
   const refreshSource = useCallback(() => mutation.mutate("refresh"), [mutation]);
   const sendFollowup = useCallback(() => mutation.mutate("send"), [mutation]);
   const editFollowup = useCallback(
@@ -543,10 +540,8 @@ function TaskDetail({
             task={task}
             conversation={conversation}
             colors={colors}
-            busy={mutation.isPending}
             onAssign={startAssignment}
             onComplete={startCompletion}
-            onResume={resumeConversation}
           />
         )}
       </ScrollView>
@@ -844,18 +839,14 @@ function TaskTranscript({
   task,
   conversation,
   colors,
-  busy,
   onAssign,
   onComplete,
-  onResume,
 }: {
   task: Task;
   conversation?: import("./appearance.js").Conversation;
   colors: Colors;
-  busy: boolean;
   onAssign: () => void;
   onComplete: () => void;
-  onResume: () => void;
 }) {
   const styles = useTaskStyles(colors);
   return (
@@ -928,21 +919,6 @@ function TaskTranscript({
           />
         </View>
       )}
-      {task.state === "paused" && (
-        <View style={styles.card}>
-          <Text style={styles.title}>Conversation paused</Text>
-          <Text style={styles.muted}>
-            The history is saved. Resume the same target, then send a follow-up to continue.
-          </Text>
-          <Action
-            colors={colors}
-            label="Resume conversation"
-            icon="RotateCcw"
-            disabled={busy}
-            onPress={onResume}
-          />
-        </View>
-      )}
       {task.state === "done" && (
         <Text style={styles.muted}>Completed by you · Linear: {task.issue.state.name}</Text>
       )}
@@ -989,7 +965,7 @@ function completionLabel(publish: boolean) {
 }
 
 function canSendTask(task: Task, error?: string) {
-  return task.state === "review" && task.pending?.phase === "sent" && !error;
+  return ["review", "paused"].includes(task.state) && task.pending?.phase === "sent" && !error;
 }
 function taskBanner(task: Task, error?: string) {
   return (
@@ -1004,7 +980,5 @@ function needsRetry(task: Task) {
   return Boolean(task.pending && task.pending.phase !== "sent");
 }
 function showComposer(task: Task, tab: string) {
-  return (
-    tab === "conversation" && task.assignment && task.state !== "done" && task.state !== "paused"
-  );
+  return tab === "conversation" && task.assignment && task.state !== "done";
 }

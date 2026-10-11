@@ -48,8 +48,10 @@ Task state and activity are saved privately under
 `$PASEO_HOME/employee-tasks/<Genesis account key>.json`, using atomic writes. The room
 bridge saves its transcript separately. Restarting never replays an assignment. An
 unconfirmed delivery exposes **Retry delivery**, preserving the original message ID,
-body, and recipient. **Resume conversation** obtains a fresh room session without
-sending; an unanswered resumed conversation cannot be completed until a result arrives.
+body, and recipient. Your next message automatically reconnects a paused conversation
+to the same recipient with recent confirmed history as context. Opening a conversation
+never reconnects or sends by itself. Uncertain delivery still requires an explicit retry;
+a task cannot be completed until a correlated result arrives.
 
 Linear snapshots update on import, **Refresh issue**, and explicit Linear completion.
 V1 does not automatically synchronize all Linear issues, ingest Slack, post Slack
@@ -97,8 +99,8 @@ by Genesis account, workspace, and agent. Restarting the bridge restores saved
 messages, including ended DMs. History is not synchronized between machines. Messages from before this upgrade can only be recovered while
 still retained by the employee pod; the panel reports gaps.
 
-An expired employee session pauses its DM. **Resume conversation** opens a fresh
-employee session without sending anything. Your next explicit message includes up
+An expired employee session pauses its DM. Sending your next message automatically
+opens a fresh session with the same recipient. That message includes up
 to 20 recent confirmed messages (at most 24 KiB) as quoted context. This preserves
 continuity without restoring the employee engine's exact state. A failed send is
 marked **Delivery unconfirmed**; **Retry message** reuses the original message ID.

@@ -322,18 +322,13 @@ export class TaskService {
     return this.exclusive(`${account.owner}:${input.taskId}`, async () => {
       await account.store.update((tasks) => {
         const current = requireTask(tasks, input.taskId);
-        if (
-          !current.assignment ||
-          !current.room ||
-          current.state === "done" ||
-          current.state === "paused"
-        )
-          throw new Error("Resume an assigned task before sending a message.");
+        if (!current.assignment || !current.room || current.state === "done")
+          throw new Error("Assign an active task before sending a message.");
         if (current.pending?.id === input.id && current.pending.text !== input.text)
           throw new Error("A retry must keep the original message.");
         if (
           current.pending?.id !== input.id &&
-          (current.state !== "review" || current.pending?.phase !== "sent")
+          (!["review", "paused"].includes(current.state) || current.pending?.phase !== "sent")
         )
           throw new Error("Wait for the outstanding reply or retry its delivery.");
         if (current.pending?.id !== input.id) {

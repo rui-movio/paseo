@@ -32,6 +32,9 @@ function fixture() {
   let opens = 0;
   let failSend = false;
   let failRead = false;
+  let resumes = 0;
+  let resumeError = false;
+  let pauseSend = false;
   let answer: false | "reply" | "done" = false;
   let connections = 0;
   function archiveEvents() {
@@ -80,11 +83,19 @@ function fixture() {
     if (path.endsWith("/history"))
       return Response.json({ room: rooms[0], messages, pendingId, pendingSince: Date.now() });
     if (path.endsWith("/resume")) {
+      resumes++;
+      if (resumeError)
+        return Response.json({ error: "Selected teammate is unavailable" }, { status: 409 });
       rooms[0].paused = false;
       rooms[0].started = false;
       return Response.json(rooms[0]);
     }
     if (path.endsWith("/messages")) {
+      if (pauseSend || rooms[0].paused) {
+        pauseSend = false;
+        rooms[0].paused = true;
+        return Response.json({ error: "Room paused", paused: true }, { status: 409 });
+      }
       const body = await request.json();
       sent.push(body);
       let message = messages.find((entry) => entry.id === body.id);
@@ -161,6 +172,13 @@ function fixture() {
       }),
     sent,
     opens: () => opens,
+    resumes: () => resumes,
+    rejectResume: () => {
+      resumeError = true;
+    },
+    pauseNextSend: () => {
+      pauseSend = true;
+    },
     connections: () => connections,
     failReads: () => {
       failRead = true;
@@ -343,6 +361,83 @@ describe("employee conversations", () => {
     );
     fake.client.dispose();
     await expect(fake.client.state()).rejects.toThrow("disabled");
+  });
+
+  it("reconnects a paused room only on send and admits one concurrent message", async () => {
+    const fake = fixture();
+    const room = await fake.client.open("Jerry");
+    fake.rooms[0].paused = true;
+    fake.messages.push({
+      id: "old",
+      sender: "employee",
+      text: "Saved history",
+      at: "now",
+      update: false,
+      replyTo: null,
+    });
+    await fake.client.state();
+    expect(fake.resumes()).toBe(0);
+    const results = await Promise.allSettled([
+      fake.client.send(room.room, "Continue", "m_aaaaaaaaaaaaaaaa"),
+      fake.client.send(room.room, "Second", "m_bbbbbbbbbbbbbbbb"),
+    ]);
+    expect(results.map((result) => result.status)).toEqual(["fulfilled", "rejected"]);
+    expect(fake.resumes()).toBe(1);
+    expect(fake.sent).toEqual([
+      { id: "m_aaaaaaaaaaaaaaaa", text: "Continue", kind: "human", expects_reply: true },
+    ]);
+    expect((await fake.client.state()).conversations[0].messages[0].text).toBe("Saved history");
+  });
+  it("reconnects when a pre-send read discovers a lost session", async () => {
+    const fake = fixture();
+    const room = await fake.client.open("Jerry");
+    await fake.client.send(room.room, "First", "m_aaaaaaaaaaaaaaaa");
+    fake.events.push({
+      seq: 1,
+      type: "reply",
+      text: "Done",
+      at: "now",
+      in_reply_to: "m_aaaaaaaaaaaaaaaa",
+    });
+    await fake.client.poll(room.room);
+    fake.rooms[0].paused = true;
+    await fake.client.send(room.room, "Continue", "m_bbbbbbbbbbbbbbbb");
+    expect(fake.resumes()).toBe(1);
+    expect(fake.sent).toHaveLength(2);
+  });
+  it("retries a pre-admission paused rejection with the same ID but never replays uncertain delivery", async () => {
+    const fake = fixture();
+    const room = await fake.client.open("Jerry");
+    fake.pauseNextSend();
+    fake.failNext();
+    await expect(fake.client.send(room.room, "Keep this", "m_aaaaaaaaaaaaaaaa")).rejects.toThrow(
+      "after admission",
+    );
+    expect(fake.resumes()).toBe(1);
+    expect(fake.sent).toHaveLength(1);
+    expect(fake.sent[0].id).toBe("m_aaaaaaaaaaaaaaaa");
+    await fake.client.state();
+    fake.rooms[0].paused = true;
+    await fake.client.state();
+    await expect(fake.client.send(room.room, "Another", "m_bbbbbbbbbbbbbbbb")).rejects.toThrow(
+      "unconfirmed",
+    );
+    expect(fake.resumes()).toBe(1);
+    await fake.client.send(room.room, "Keep this", "m_aaaaaaaaaaaaaaaa");
+    expect(fake.resumes()).toBe(2);
+    expect(fake.sent[1]).toEqual(fake.sent[0]);
+  });
+  it("does not send when reconnecting the same target fails", async () => {
+    const fake = fixture();
+    const room = await fake.client.open("Jerry");
+    fake.rooms[0].paused = true;
+    await fake.client.state();
+    fake.rejectResume();
+    await expect(fake.client.send(room.room, "Continue", "m_aaaaaaaaaaaaaaaa")).rejects.toThrow(
+      "teammate is unavailable",
+    );
+    expect(fake.sent).toHaveLength(0);
+    expect((await fake.client.state()).conversations[0].paused).toBe(true);
   });
 
   it("restores saved history in a new daemon and resumes a paused room without sending", async () => {

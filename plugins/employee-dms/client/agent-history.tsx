@@ -6,7 +6,7 @@ import { useHubState } from "./hub-state.js";
 import { useToast } from "@getpaseo/plugin/client/react-native";
 import { Directory, Detail, EmptyConversation } from "./conversations.js";
 import { useStyles, type Colors, type Conversation, type Employee } from "./appearance.js";
-import { stateRpc, openRpc, sendRpc, readRpc, endRpc, resumeRpc } from "../shared/rooms.js";
+import { stateRpc, openRpc, sendRpc, readRpc, endRpc } from "../shared/rooms.js";
 
 interface DraftState {
   selected: string | null;
@@ -58,7 +58,6 @@ export function AgentHistory(props: PluginAgentPanelProps) {
   const sendMessage = useRpc(sendRpc);
   const readRoom = useRpc(readRpc);
   const endRoom = useRpc(endRpc);
-  const resumeRoom = useRpc(resumeRpc);
   const queryClient = useQueryClient();
   const toast = useToast();
   const agentTitle = useAgent(props.agentId, (agent) => agent.title);
@@ -109,11 +108,6 @@ export function AgentHistory(props: PluginAgentPanelProps) {
   const resend = useMutation({
     mutationFn: (input: { room: string; text: string; id: string }) =>
       sendMessage({ ...scope, ...input }),
-    onSuccess: refresh,
-    onError: failure,
-  });
-  const resume = useMutation({
-    mutationFn: (room: string) => resumeRoom({ ...scope, room }),
     onSuccess: refresh,
     onError: failure,
   });
@@ -183,13 +177,11 @@ export function AgentHistory(props: PluginAgentPanelProps) {
             text={draftText(draft, selected.room)}
             draftId={draft.ids[selected.room]}
             sending={send.isPending || resend.isPending}
-            resuming={resume.isPending}
             ending={end.isPending}
             onDirectory={directory}
             onEdit={edit}
             onSend={send.mutate}
             onRetry={resend.mutate}
-            onResume={resume.mutate}
             onEnd={end.mutate}
             agentTitle={agentTitle}
             employeeStatus={

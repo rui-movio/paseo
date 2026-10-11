@@ -32,13 +32,11 @@ function props(overrides: Partial<DetailProps> = {}): DetailProps {
     draftId: "m_aaaaaaaaaaaaaaaa",
     sending: false,
     ending: false,
-    resuming: false,
     agentTitle: "Test",
     onDirectory: vi.fn(),
     onEdit: vi.fn(),
     onSend: vi.fn(),
     onEnd: vi.fn(),
-    onResume: vi.fn(),
     onRetry: vi.fn(),
     newId: () => "m_bbbbbbbbbbbbbbbb",
     ...overrides,
@@ -81,7 +79,7 @@ describe("employee chat composer", () => {
     }
     expect(input.onSend).not.toHaveBeenCalled();
   });
-  it("keeps saved messages visible when paused and resumes only when pressed", () => {
+  it("keeps saved messages and the composer available when paused without a Resume button", () => {
     const input = props();
     input.room = {
       ...input.room,
@@ -99,10 +97,13 @@ describe("employee chat composer", () => {
     };
     const screen = render(<Detail {...input} />);
     expect(screen.getByText("Saved answer")).toBeTruthy();
-    expect(screen.queryByLabelText("Message Jerry")).toBeNull();
-    expect(input.onResume).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Resume conversation" }));
-    expect(input.onResume).toHaveBeenCalledWith("r_one");
+    expect(screen.queryByRole("button", { name: "Resume conversation" })).toBeNull();
     expect(input.onSend).not.toHaveBeenCalled();
+    fireEvent.keyDown(screen.getByLabelText("Message Jerry"), { key: "Enter" });
+    expect(input.onSend).toHaveBeenCalledExactlyOnceWith({
+      room: "r_one",
+      text: "hello",
+      id: "m_aaaaaaaaaaaaaaaa",
+    });
   });
 });

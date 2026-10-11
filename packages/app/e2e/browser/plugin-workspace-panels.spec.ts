@@ -523,7 +523,7 @@ test("opens the unified AI Employees UI beside a local agent and restores its DM
       `
 import * as tasks from "./shared/tasks";
 import { stateRpc } from "./shared/rooms";
-const room = { room: "fixture-room", aiEmployeeId: "fixture-employee", name: "Builder", after: 0, createdAt: "2026-10-10T00:00:00Z", activity: "", unread: 0, pending: false, ended: false, historyGap: false, messages: [{ id: "post-1", sender: "employee", text: "Fixture result ready for review", at: "2026-10-10T00:00:00Z", update: false, replyTo: null }] };
+const room = { room: "fixture-room", aiEmployeeId: "fixture-employee", name: "Builder", paused: true, after: 0, createdAt: "2026-10-10T00:00:00Z", activity: "", unread: 0, pending: false, ended: false, historyGap: false, messages: [{ id: "post-1", sender: "employee", text: "Fixture result ready for review", at: "2026-10-10T00:00:00Z", update: false, replyTo: null }] };
 export default function contribute(server) {
   server.handle(tasks.directStateRpc, () => ({ employees: [], conversations: [room] }));
   server.handle(tasks.directReadRpc, () => ({ ok: true }));
@@ -561,6 +561,9 @@ export default function contribute(server) {
     await expect(page.getByRole("textbox", { name: "Message Builder", exact: true })).toHaveValue(
       "Keep this employee draft",
     );
+    await expect(
+      page.getByRole("button", { name: "Resume conversation", exact: true }),
+    ).toHaveCount(0);
     await capture(page, testInfo, "ai-employees-global");
     await page.setViewportSize(COMPACT_VIEWPORT);
     await openCompactSidebar(page);

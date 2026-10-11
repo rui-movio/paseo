@@ -37,7 +37,6 @@ export function DirectMessages(
   const state = useRpc(rpc.directStateRpc);
   const open = useRpc(rpc.directOpenRpc);
   const send = useRpc(rpc.directSendRpc);
-  const resume = useRpc(rpc.directResumeRpc);
   const end = useRpc(rpc.directEndRpc);
   const read = useRpc(rpc.directReadRpc);
   const cache = useQueryClient();
@@ -74,11 +73,6 @@ export function DirectMessages(
   });
   const retrying = useMutation({
     mutationFn: (input: { room: string; text: string; id: string }) => send(input),
-    onSuccess: refresh,
-    onError: failure,
-  });
-  const resuming = useMutation({
-    mutationFn: (room: string) => resume({ room }),
     onSuccess: refresh,
     onError: failure,
   });
@@ -184,7 +178,6 @@ export function DirectMessages(
               draftId={draft.ids[room.room]}
               sending={sending.isPending || retrying.isPending}
               ending={ending.isPending}
-              resuming={resuming.isPending}
               agentTitle={props.agentTitle ?? null}
               employeeStatus={
                 employees.find((employee) => employee.ai_employee_id === room.aiEmployeeId)?.status
@@ -193,7 +186,6 @@ export function DirectMessages(
               onEdit={editMessage}
               onSend={sending.mutate}
               onRetry={retrying.mutate}
-              onResume={resuming.mutate}
               onEnd={ending.mutate}
               newId={newMessageId}
             />

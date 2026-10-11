@@ -405,14 +405,12 @@ export interface DetailProps {
   draftId?: string;
   sending: boolean;
   ending: boolean;
-  resuming: boolean;
   agentTitle: string | null;
   employeeStatus?: string;
   onDirectory: () => void;
   onEdit: (room: string, text: string) => void;
   onSend: (input: { room: string; text: string; id: string }) => void;
   onRetry: (input: { room: string; text: string; id: string }) => void;
-  onResume: (room: string) => void;
   onEnd: (room: string) => void;
   onAgent?: () => void;
   newId: () => string;
@@ -430,8 +428,7 @@ export function Detail(props: DetailProps) {
     props.onEnd(room.room);
   }, [props, room.room]);
   const status = conversationStatus(room, props.employeeStatus);
-  const retryDisabled =
-    props.sending || props.resuming || room.pending || room.paused === true || room.ended;
+  const retryDisabled = props.sending || room.pending || room.ended;
   return (
     <View style={styles.conversation}>
       <View style={styles.header}>
@@ -545,30 +542,11 @@ export function Detail(props: DetailProps) {
 
 function conversationStatus(room: Conversation, employeeStatus: string | undefined): string {
   if (room.ended) return "DM ended";
-  if (room.paused) return "Session paused";
   if (room.pending) return "Thinking…";
   return availability(employeeStatus ?? "Unknown");
 }
 function ConversationComposer({ detail }: { detail: DetailProps }) {
-  const styles = useStyles(detail.colors);
-  const resume = useCallback(() => detail.onResume(detail.room.room), [detail]);
-  if (detail.room.ended) return null;
-  if (!detail.room.paused) return <Composer detail={detail} />;
-  return (
-    <View style={styles.banner}>
-      <Text style={styles.small}>
-        Your history is saved. Resume opens a new employee session; your next message includes
-        recent history as context.
-      </Text>
-      <Action
-        colors={detail.colors}
-        label={detail.resuming ? "Resuming…" : "Resume conversation"}
-        icon="RotateCcw"
-        disabled={detail.resuming}
-        onPress={resume}
-      />
-    </View>
-  );
+  return detail.room.ended ? null : <Composer detail={detail} />;
 }
 
 function differentDay(message: Message, previous: Message | undefined): boolean {
@@ -589,7 +567,6 @@ function DateDivider({ colors, at }: { colors: Colors; at: string }) {
 }
 function activity(room: Conversation): string {
   if (room.ended) return "This DM ended. Start a new one from the directory.";
-  if (room.paused) return "The employee session ended. Resume to continue.";
   if (room.activity) return `${room.name} ${room.activity}`;
   if (room.pending) return `${room.name} is thinking…`;
   return "";

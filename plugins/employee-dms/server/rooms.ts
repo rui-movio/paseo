@@ -59,6 +59,8 @@ export interface RoomsOptions {
   owner?: string;
 }
 
+class PausedRoomError extends Error {}
+
 export class EmployeeRooms {
   private connection: Promise<RoomConnection> | null = null;
   private readonly opening = new Map<string, Promise<z.infer<typeof roomSchema>>>();
@@ -157,7 +159,7 @@ export class EmployeeRooms {
       if (failure.paused) entry.conversation.paused = true;
       if (failure.ended) entry.conversation.ended = true;
     }
-    return new Error(failure.error);
+    return failure.paused ? new PausedRoomError(failure.error) : new Error(failure.error);
   }
   async state(): Promise<ConversationState> {
     const [employees, listed] = await Promise.all([
@@ -390,22 +392,44 @@ export class EmployeeRooms {
     const entry = this.requireRoom(id);
     const previous = entry.conversation.messages.find((message) => message.id === messageId);
     if (previous?.sender === "agent") sender = "agent";
-    if (entry.conversation.paused)
-      throw new Error("Resume this DM before sending another message.");
-    if (entry.pendingId && entry.pendingId !== messageId)
+    if (entry.sending) throw new Error("A message is already being sent to this employee.");
+    if (
+      entry.conversation.messages.some(
+        (message) => message.delivery === "unconfirmed" && message.id !== messageId,
+      )
+    )
+      throw new Error("Retry the unconfirmed message before sending another question.");
+    if (!entry.conversation.paused && entry.pendingId && entry.pendingId !== messageId)
       throw new Error("Wait for this employee’s current answer before sending another question.");
     entry.version++;
     entry.sending = true;
-    entry.pendingId = messageId;
-    entry.pendingSince = this.now();
-    entry.conversation.pending = true;
     try {
-      const sent = await this.request(`/rooms/${id}/messages`, sentSchema, {
+      // Detect an expired session through a read before admitting this new message.
+      await entry.reading;
+      await this.poll(id);
+      if (entry.conversation.paused) await this.resume(id);
+      this.requireRoom(id);
+      const body = {
         id: messageId,
         text,
         kind: sender === "agent" ? "agent" : "human",
         expects_reply: true,
-      });
+      };
+      const deliver = () => {
+        entry.pendingId = messageId;
+        entry.pendingSince = this.now();
+        entry.conversation.pending = true;
+        return this.request(`/rooms/${id}/messages`, sentSchema, body);
+      };
+      let sent: z.infer<typeof sentSchema>;
+      try {
+        sent = await deliver();
+      } catch (error) {
+        // The bridge rejects paused rooms before admission. Unknown delivery never replays here.
+        if (!(error instanceof PausedRoomError)) throw error;
+        await this.resume(id);
+        sent = await deliver();
+      }
       entry.conversation.started = true;
       const existing = entry.conversation.messages.find((message) => message.id === sent.id);
       if (existing) existing.delivery = "sent";
