@@ -1798,19 +1798,23 @@ async function resolveClaudeAuth(
   }
 }
 
-function extractContextWindowSize(modelUsage: unknown): number | undefined {
+/**
+ * `modelUsage` accumulates every model the session has called, so after a model switch it still
+ * holds the previous model's window. Prefer the active model's entry; fall back to the largest
+ * window so a 200k subagent model never shrinks a 1M main model.
+ */
+function extractContextWindowSize(
+  modelUsage: unknown,
+  activeModelIds: ReadonlyArray<string | null | undefined> = [],
+): number | undefined {
   const usageRecord = toObjectRecord(modelUsage);
   if (!usageRecord) {
     return undefined;
   }
 
-  let maxContextWindow: number | undefined;
-  for (const value of Object.values(usageRecord)) {
-    const valueRecord = toObjectRecord(value);
-    if (!valueRecord) {
-      continue;
-    }
-    const contextWindow = valueRecord.contextWindow;
+  const contextWindows = new Map<string, number>();
+  for (const [modelId, value] of Object.entries(usageRecord)) {
+    const contextWindow = toObjectRecord(value)?.contextWindow;
     if (
       typeof contextWindow !== "number" ||
       !Number.isFinite(contextWindow) ||
@@ -1818,10 +1822,24 @@ function extractContextWindowSize(modelUsage: unknown): number | undefined {
     ) {
       continue;
     }
-    maxContextWindow = Math.max(maxContextWindow ?? 0, contextWindow);
+    contextWindows.set(modelId, contextWindow);
   }
 
-  return maxContextWindow;
+  for (const activeModelId of activeModelIds) {
+    if (!activeModelId) continue;
+    const exact = contextWindows.get(activeModelId);
+    if (exact !== undefined) return exact;
+    const bareActiveModelId = stripOneMillionSuffix(activeModelId);
+    for (const [modelId, contextWindow] of contextWindows) {
+      if (stripOneMillionSuffix(modelId) === bareActiveModelId) return contextWindow;
+    }
+  }
+
+  return contextWindows.size > 0 ? Math.max(...contextWindows.values()) : undefined;
+}
+
+function stripOneMillionSuffix(modelId: string): string {
+  return modelId.replace(/\[1m\]$/i, "").toLowerCase();
 }
 
 function readStreamRequestInputTokens(event: Record<string, unknown>): number | undefined {
@@ -1946,8 +1964,11 @@ class ClaudeContextUsageState {
     this.contextWindowMaxTokens = contextWindowMaxTokens;
   }
 
-  recordModelUsage(modelUsage: unknown): number | undefined {
-    const contextWindowMaxTokens = extractContextWindowSize(modelUsage);
+  recordModelUsage(
+    modelUsage: unknown,
+    activeModelIds: ReadonlyArray<string | null | undefined> = [],
+  ): number | undefined {
+    const contextWindowMaxTokens = extractContextWindowSize(modelUsage, activeModelIds);
     if (contextWindowMaxTokens !== undefined) {
       this.contextWindowMaxTokens = contextWindowMaxTokens;
     }
@@ -1984,7 +2005,11 @@ class ClaudeContextUsageState {
     return this.createUsageUpdatedEvent(usedTokens);
   }
 
-  buildResultUsage(message: SDKResultMessage, modelUsage: unknown): AgentUsage | undefined {
+  buildResultUsage(
+    message: SDKResultMessage,
+    modelUsage: unknown,
+    activeModelIds: ReadonlyArray<string | null | undefined> = [],
+  ): AgentUsage | undefined {
     try {
       if (!message.usage) {
         return undefined;
@@ -1996,7 +2021,10 @@ class ClaudeContextUsageState {
         totalCostUsd: message.total_cost_usd,
       };
 
-      const modelContextWindowMaxTokens = this.recordModelUsage(modelUsage ?? message.modelUsage);
+      const modelContextWindowMaxTokens = this.recordModelUsage(
+        modelUsage ?? message.modelUsage,
+        activeModelIds,
+      );
       if (this.contextWindowMaxTokens !== undefined) {
         usage.contextWindowMaxTokens = this.contextWindowMaxTokens;
       } else if (modelContextWindowMaxTokens !== undefined) {
@@ -4803,7 +4831,10 @@ class ClaudeAgentSession implements AgentSession {
   }
 
   private convertUsage(message: SDKResultMessage, modelUsage?: unknown): AgentUsage | undefined {
-    return this.contextUsage.buildResultUsage(message, modelUsage);
+    return this.contextUsage.buildResultUsage(message, modelUsage, [
+      this.lastRuntimeModel,
+      this.config.model,
+    ]);
   }
 
   private handlePermissionRequest: CanUseTool = async (
