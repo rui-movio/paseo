@@ -285,3 +285,179 @@ describe("task file durability", () => {
     expect(await readFile(file, "utf8")).toBe("bad data");
   });
 });
+
+describe("Employee DM threads", () => {
+  const origin = {
+    workspaceId: "genesis",
+    agentId: "claude-1",
+    title: "hello",
+    project: "genesis",
+    provider: "claude",
+  };
+  async function threadsFixture() {
+    const f = await fixture();
+    const { ThreadService } = await import("./threads.js");
+    const threads = new ThreadService(f.service, {
+      home: f.home,
+      createRooms: f.createRooms,
+      timeout: 80,
+      interval: 1,
+    });
+    cleanups.push(() => threads.dispose());
+    const dm = await threads.open("emp");
+    return { ...f, threads, dm, ThreadService };
+  }
+  it("groups independent asks in one DM and preserves the index privately across restart", async () => {
+    const f = await threadsFixture();
+    const first = await f.threads.start(f.dm.id, "Private ask", "m_aaaaaaaaaaaaaaaa");
+    const second = await f.threads.start(f.dm.id, "Review PR", "m_bbbbbbbbbbbbbbbb", origin);
+    expect(first.room).not.toBe(second.room);
+    expect(f.opened[0]!.scope).not.toBe(f.opened[1]!.scope);
+    expect((await f.threads.open("Jerry")).id).toBe(f.dm.id);
+    const state = await f.threads.state();
+    expect(state.dms).toHaveLength(1);
+    expect(state.threads).toHaveLength(2);
+    expect(state.threads[1]!.origin?.title).toBe("hello");
+    expect(
+      (await stat(path.join(f.home, "employee-threads", `${"a".repeat(64)}.json`))).mode & 0o777,
+    ).toBe(0o600);
+    f.threads.dispose();
+    const restarted = new f.ThreadService(f.service, { home: f.home, createRooms: f.createRooms });
+    cleanups.push(() => restarted.dispose());
+    expect((await restarted.state()).threads.map((t) => t.id)).toEqual([first.id, second.id]);
+    expect(f.sent).toHaveLength(2);
+  });
+  it("limits local-session reads and continuations to owned threads", async () => {
+    const f = await threadsFixture();
+    const personal = await f.threads.start(f.dm.id, "Personal secret", "m_cccccccccccccccc");
+    const owned = await f.threads.start(f.dm.id, "Agent question", "m_dddddddddddddddd", origin);
+    await expect(f.threads.read("emp", origin, 20, personal.id)).rejects.toThrow("unavailable");
+    await expect(
+      f.threads.ask("emp", "Foreign followup", { ...origin, agentId: "other" }, owned.id),
+    ).rejects.toThrow("unavailable");
+    expect(await f.threads.read("emp", origin, 20)).toContain("Agent question");
+    expect(await f.threads.read("emp", origin, 20)).not.toContain("Personal secret");
+    f.setOwner("b".repeat(64));
+    expect((await f.threads.state()).dms).toEqual([]);
+    await expect(f.threads.detail(owned.id)).rejects.toThrow("unavailable");
+  });
+  it("retains unknown delivery and only retries the original ID explicitly after restart", async () => {
+    const f = await threadsFixture();
+    f.setFail(true);
+    const thread = await f.threads.start(f.dm.id, "Original body", "m_eeeeeeeeeeeeeeee", origin);
+    expect(thread.phase).toBe("unconfirmed");
+    f.threads.dispose();
+    const restarted = new f.ThreadService(f.service, { home: f.home, createRooms: f.createRooms });
+    cleanups.push(() => restarted.dispose());
+    await restarted.state();
+    expect(f.sent).toHaveLength(1);
+    f.setFail(false);
+    await restarted.retry(thread.id);
+    expect(f.sent.map((m) => m.id)).toEqual([thread.root.id, thread.root.id]);
+    expect(f.sent[1]!.text).toBe("Original body");
+    expect(f.opened).toHaveLength(1);
+    await expect(restarted.start(f.dm.id, "Different body", thread.id, origin)).rejects.toThrow(
+      "another ask",
+    );
+  });
+  it("returns only the matching employee answer and records it in the shared DM thread", async () => {
+    const f = await threadsFixture();
+    const waiting = f.threads.ask("emp", "Review this PR", origin);
+    await vi.waitFor(() => expect(f.sent).toHaveLength(1));
+    const sent = f.sent[0]!,
+      room = f.states.get(sent.scope)!.conversations[0]!;
+    room.messages.push({
+      id: "unrelated",
+      sender: "employee",
+      text: "Wrong answer",
+      at: new Date().toISOString(),
+      update: false,
+      replyTo: "another-request",
+    });
+    room.messages.push({
+      id: "answer",
+      sender: "employee",
+      text: "Correct review",
+      at: new Date().toISOString(),
+      update: false,
+      replyTo: sent.id,
+    });
+    expect(await waiting).toContain("Correct review");
+    const thread = (await f.threads.state()).threads[0]!;
+    expect(thread.returnedMessageId).toBe("answer");
+    expect(thread.origin).toEqual(origin);
+    expect(await f.threads.read("emp", origin, 20, thread.id)).toContain("Correct review");
+  });
+  it("preserves an old DM as one saved-history thread without splitting or resending", async () => {
+    const f = await threadsFixture();
+    const legacy = await f.service.direct();
+    await legacy.open("emp");
+    await legacy.send("r_1", "Older conversation", "m_ffffffffffffffff");
+    const state = await f.threads.state();
+    expect(state.dms).toHaveLength(1);
+    expect(state.threads[0]!.legacy).toBe(true);
+    expect(state.threads[0]!.root.text).toBe("Older conversation");
+    expect(f.sent).toHaveLength(1);
+    await f.threads.state();
+    expect((await f.threads.state()).threads).toHaveLength(1);
+  });
+});
+
+describe("Employee thread tool lifecycle", () => {
+  it("deduplicates a retried tool invocation and revokes archived-session access", async () => {
+    const f = await fixture();
+    const { ThreadService } = await import("./threads.js");
+    const service = new ThreadService(f.service, {
+      home: f.home,
+      createRooms: f.createRooms,
+      timeout: 0,
+    });
+    cleanups.push(() => service.dispose());
+    const origin = {
+      workspaceId: "workspace",
+      agentId: "local",
+      title: "hello",
+      project: "genesis",
+      provider: "claude",
+    };
+    const request = { id: "m_0123456789abcdef", signal: new AbortController().signal };
+    await service.ask("emp", "Same tool request", origin, undefined, request);
+    await service.ask("emp", "Same tool request", origin, undefined, request);
+    expect(f.sent).toHaveLength(1);
+    expect((await service.state()).threads).toHaveLength(1);
+    service.revokeSession(origin);
+    await expect(service.read("emp", origin, 20)).rejects.toThrow();
+    service.activateSession(origin);
+    expect(await service.read("emp", origin, 20)).toContain("Same tool request");
+  });
+});
+
+describe("Waiting employee thread requests", () => {
+  it("cancels an archived agent's pending tool without deleting the DM thread", async () => {
+    const f = await fixture();
+    const { ThreadService } = await import("./threads.js");
+    const service = new ThreadService(f.service, {
+      home: f.home,
+      createRooms: f.createRooms,
+      timeout: 10000,
+      interval: 10,
+    });
+    cleanups.push(() => service.dispose());
+    const origin = {
+      workspaceId: "workspace",
+      agentId: "local",
+      title: "hello",
+      project: "genesis",
+      provider: "claude",
+    };
+    const waiting = service.ask("emp", "Waiting question", origin);
+    await vi.waitFor(() => expect(f.sent).toHaveLength(1));
+    const cancelled = expect(waiting).rejects.toThrow();
+    service.revokeSession(origin);
+    await cancelled;
+    const state = await service.state();
+    expect(state.threads).toHaveLength(1);
+    expect(state.threads[0]!.root.text).toBe("Waiting question");
+    expect(state.threads[0]!.returnedMessageId).toBeUndefined();
+  });
+});

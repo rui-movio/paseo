@@ -21,6 +21,15 @@ export default function contribute(client: PluginClientContext) {
     return <EmployeeHub {...props} onOpenBeside={openBeside} />;
   }
   function Panel(props: PluginAgentPanelProps) {
+    const openBeside = useCallback(
+      (agent: LocalAgent) =>
+        client.openPanel("conversations", {
+          workspaceId: agent.workspaceId,
+          agentId: agent.id,
+          placement: "beside",
+        }),
+      [],
+    );
     const agentTitle = useAgent(props.agentId, (agent) => agent.title);
     return (
       <EmployeeHub
@@ -28,6 +37,7 @@ export default function contribute(client: PluginClientContext) {
         params={emptyParams}
         agentId={props.agentId}
         agentTitle={agentTitle}
+        onOpenBeside={openBeside}
       />
     );
   }

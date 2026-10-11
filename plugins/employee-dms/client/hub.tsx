@@ -13,6 +13,7 @@ import { DirectMessages } from "./direct.js";
 import { Action } from "./conversations.js";
 import { Choice } from "./choice.js";
 import { useTaskStyles } from "./task-appearance.js";
+import type { ThreadOrigin } from "../shared/threads.js";
 import { useHubState } from "./hub-state.js";
 
 export interface LocalAgent {
@@ -66,6 +67,14 @@ export function EmployeeHub(props: EmployeeHubProps) {
     [],
   );
   const openPicker = useCallback(() => setPicker(true), []);
+  const openSource = useCallback(
+    (origin: ThreadOrigin) => {
+      if (props.layout.compact || props.layout.platform !== "web")
+        props.navigation?.openAgent({ agentId: origin.agentId });
+      else props.onOpenBeside?.({ id: origin.agentId, workspaceId: origin.workspaceId });
+    },
+    [props],
+  );
   const colors = props.theme.colors;
   return (
     <View style={styles.screen} onLayout={measure}>
@@ -101,7 +110,12 @@ export function EmployeeHub(props: EmployeeHubProps) {
         )}
       </View>
       <View style={tab === "conversations" ? visible : hidden}>
-        <DirectMessages {...props} layout={layout} active={tab === "conversations"} />
+        <DirectMessages
+          {...props}
+          layout={layout}
+          active={tab === "conversations"}
+          onOpenSource={props.onOpenBeside || props.navigation ? openSource : undefined}
+        />
       </View>
       <View style={tab === "tasks" ? visible : hidden}>
         <TaskQueue
