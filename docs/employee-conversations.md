@@ -72,17 +72,16 @@ DMs remain usable on pods without the new teammate directory.
 the unified AI Employees panel beside the current coding session. `/room` remains
 a shortcut; it does not open a second employee product.
 
-Existing agent-scoped DMs remain under **Conversations → Local agent history** in
-that panel. They belong to their original workspace and local agent, and the UI and
-agent tools use the same transcript. Choose **Direct messages** to return to global
-DMs. These scopes stay separate so opening the panel does not grant the local agent
-access to your global DMs or task conversations.
+The side pane shows the same global DMs and tasks as the full screen. Previous
+agent-scoped `/room` transcripts remain stored for their original workspace and
+local agent, but have no separate history tab. Agent tools still use that scoped
+history; opening the panel does not grant access to global DMs or task conversations.
 
-`ask_employee`, `read_room`, and `resume_employee` are available to interactive Claude sessions. Other
-providers can use the human DM panel; provider tool support can be added separately.
-A question waits for its correlated reply. Human and agent sends share admission
-state so another question cannot overtake an outstanding answer. Employee posts and
-typing appear in the panel and never create an agent turn.
+`ask_employee`, `read_room`, and `resume_employee` are available to interactive
+Claude sessions. Other providers can gain tool support separately. A question waits
+for its correlated reply. Admission state prevents another agent question from
+overtaking an outstanding answer. Employee replies do not automatically create a
+local agent turn.
 
 **Send to local agent** appends an attributed quote to the existing composer draft. It
 preserves current text, pending keystrokes, and attachments, and requires the user to
@@ -99,9 +98,8 @@ mod retains its image support; Paseo's image composer can follow this first text
 milestone.
 
 The shared hg-connect bridge saves text transcripts on this daemon machine, scoped
-by Genesis account, workspace, and agent. Reopening the panel or restarting the
-bridge restores saved messages, including ended DMs. History is not synchronized
-between machines. Messages from before this upgrade can only be recovered while
+by Genesis account, workspace, and agent. Restarting the bridge restores saved
+messages, including ended DMs. History is not synchronized between machines. Messages from before this upgrade can only be recovered while
 still retained by the employee pod; the panel reports gaps.
 
 An expired employee session pauses its DM. **Resume conversation** opens a fresh

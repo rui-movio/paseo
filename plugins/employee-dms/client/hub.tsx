@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Text, View, type LayoutChangeEvent } from "react-native";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -22,7 +22,6 @@ export interface LocalAgent {
 export interface EmployeeHubProps extends PluginScreenProps {
   agentId?: string;
   agentTitle?: string | null;
-  history?: (layout: PluginScreenProps["layout"]) => ReactNode;
   onOpenBeside?: (agent: LocalAgent) => void;
 }
 export function EmployeeNavigation({ currentScreen, openScreen }: PluginSidebarItemProps) {
@@ -58,7 +57,6 @@ export function EmployeeHub(props: EmployeeHubProps) {
       setFilter(initialView);
     }
   }, [initialView, setTab, setFilter]);
-  const [localHistory, setLocalHistory] = useState(false);
   const [picker, setPicker] = useState(false);
   const [width, setWidth] = useState(0);
   const compact = compactLayout(props, width);
@@ -68,8 +66,6 @@ export function EmployeeHub(props: EmployeeHubProps) {
     [],
   );
   const openPicker = useCallback(() => setPicker(true), []);
-  const openGlobal = useCallback(() => setLocalHistory(false), []);
-  const openHistory = useCallback(() => setLocalHistory(true), []);
   const colors = props.theme.colors;
   return (
     <View style={styles.screen} onLayout={measure}>
@@ -105,42 +101,7 @@ export function EmployeeHub(props: EmployeeHubProps) {
         )}
       </View>
       <View style={tab === "conversations" ? visible : hidden}>
-        {props.history && (
-          <View style={styles.scopeBar}>
-            <Choice
-              value={false}
-              label="Direct messages"
-              selected={!localHistory}
-              onChoose={openGlobal}
-              style={styles.tab}
-              selectedStyle={styles.selected}
-            >
-              <Text style={styles.small}>Direct messages</Text>
-            </Choice>
-            <Choice
-              value={true}
-              label="Local agent history"
-              selected={localHistory}
-              onChoose={openHistory}
-              style={styles.tab}
-              selectedStyle={styles.selected}
-            >
-              <Text style={styles.small}>Local agent history</Text>
-            </Choice>
-          </View>
-        )}
-        <View style={!localHistory ? visible : hidden}>
-          <DirectMessages
-            {...props}
-            layout={layout}
-            active={tab === "conversations" && !localHistory}
-          />
-        </View>
-        {props.history && (
-          <View style={localHistory ? visible : hidden}>
-            {localHistory ? props.history(layout) : null}
-          </View>
-        )}
+        <DirectMessages {...props} layout={layout} active={tab === "conversations"} />
       </View>
       <View style={tab === "tasks" ? visible : hidden}>
         <TaskQueue

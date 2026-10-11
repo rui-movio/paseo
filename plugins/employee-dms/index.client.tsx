@@ -6,7 +6,6 @@ import {
 } from "@getpaseo/plugin/client";
 import { useCallback } from "react";
 import { EmployeeHub, EmployeeNavigation, type LocalAgent } from "./client/hub.js";
-import { AgentHistory } from "./client/agent-history.js";
 
 export default function contribute(client: PluginClientContext) {
   function Screen(props: PluginScreenProps) {
@@ -23,17 +22,12 @@ export default function contribute(client: PluginClientContext) {
   }
   function Panel(props: PluginAgentPanelProps) {
     const agentTitle = useAgent(props.agentId, (agent) => agent.title);
-    const history = useCallback(
-      (layout: PluginScreenProps["layout"]) => <AgentHistory {...props} layout={layout} />,
-      [props],
-    );
     return (
       <EmployeeHub
         {...props}
         params={emptyParams}
         agentId={props.agentId}
         agentTitle={agentTitle}
-        history={history}
       />
     );
   }
