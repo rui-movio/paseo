@@ -105,6 +105,10 @@ to 20 recent confirmed messages (at most 24 KiB) as quoted context. This preserv
 continuity without restoring the employee engine's exact state. A failed send is
 marked **Delivery unconfirmed**; **Retry message** reuses the original message ID.
 
+Conversations open at the latest message. Sending jumps to the bottom; incoming replies
+follow while you are near the bottom. Scrolling back keeps your reading position, with
+**Jump to latest** available to return. This applies to DMs and task conversations.
+
 On desktop and web, **Enter** sends and **Shift+Enter** inserts a newline. IME
 confirmation and held Enter do not send. The mobile multiline keyboard keeps its
 normal behavior. Install the matching hg-connect bridge build; the panel checks

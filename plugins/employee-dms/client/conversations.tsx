@@ -1,3 +1,4 @@
+import { useChatScroll } from "./chat-scroll.js";
 import { useCallback, useMemo, useReducer, useState, type ReactNode } from "react";
 import {
   Platform,
@@ -420,6 +421,21 @@ export function Detail(props: DetailProps) {
   const { room, colors } = props;
   const styles = useStyles(colors);
   const [confirmEnd, setConfirmEnd] = useState(false);
+  const chat = useChatScroll(room);
+  const send = useCallback(
+    (input: { room: string; text: string; id: string }) => {
+      chat.followLatest();
+      props.onSend(input);
+    },
+    [chat, props],
+  );
+  const retry = useCallback(
+    (input: { room: string; text: string; id: string }) => {
+      chat.followLatest();
+      props.onRetry(input);
+    },
+    [chat, props],
+  );
   const endStyle = useMemo(() => [styles.quietButton, styles.dialogEnd], [styles]);
   const requestEnd = useCallback(() => setConfirmEnd(true), []);
   const cancelEnd = useCallback(() => setConfirmEnd(false), []);
@@ -429,6 +445,7 @@ export function Detail(props: DetailProps) {
   }, [props, room.room]);
   const status = conversationStatus(room, props.employeeStatus);
   const retryDisabled = props.sending || room.pending || room.ended;
+  const composerProps = useMemo(() => ({ ...props, onSend: send }), [props, send]);
   return (
     <View style={styles.conversation}>
       <View style={styles.header}>
@@ -477,7 +494,16 @@ export function Detail(props: DetailProps) {
           Some earlier messages were not saved before the employee session ended.
         </Text>
       )}
-      <ScrollView style={styles.scroll} contentContainerStyle={styles.transcript}>
+      <ScrollView
+        ref={chat.ref}
+        accessibilityLabel="Conversation messages"
+        style={styles.scroll}
+        contentContainerStyle={styles.transcript}
+        onScroll={chat.onScroll}
+        scrollEventThrottle={16}
+        onContentSizeChange={chat.onResize}
+        onLayout={chat.onResize}
+      >
         {!room.messages.length && (
           <>
             <DateDivider colors={colors} at={room.createdAt} />
@@ -500,18 +526,28 @@ export function Detail(props: DetailProps) {
               colors={colors}
               name={room.name}
               message={message}
-              onRetry={props.onRetry}
+              onRetry={retry}
               roomId={room.room}
               retryDisabled={retryDisabled}
             />
           </View>
         ))}
       </ScrollView>
+      {chat.showLatest && (
+        <View style={styles.activity}>
+          <Action
+            colors={colors}
+            label="Jump to latest"
+            icon="ArrowDown"
+            onPress={chat.followLatest}
+          />
+        </View>
+      )}
       <View style={styles.activity}>
         {room.pending && <Icon name="Ellipsis" size={15} color={colors.foregroundMuted} />}
         <Text style={styles.small}>{activity(room)}</Text>
       </View>
-      <ConversationComposer detail={props} />
+      <ConversationComposer detail={composerProps} />
       <Modal title={`End DM with ${room.name}?`} open={confirmEnd} onOpenChange={setConfirmEnd}>
         <Modal.Content>
           <Text style={styles.text}>

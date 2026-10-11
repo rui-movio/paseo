@@ -1,3 +1,4 @@
+import { useChatScroll } from "./chat-scroll.js";
 import { Choice } from "./choice.js";
 import { useCallback, useMemo, useState } from "react";
 import {
@@ -412,6 +413,7 @@ function TaskDetail({
   });
   const task = query.data?.task;
   const conversation = query.data?.conversation;
+  const chat = useChatScroll(conversation, tab === "conversation");
   const startAssignment = useCallback(() => setAssigning(true), []);
   const closeAssignment = useCallback(() => setAssigning(false), []);
   const startCompletion = useCallback(() => setCompleting(true), []);
@@ -424,9 +426,15 @@ function TaskDetail({
     setCompleting(false);
     void refresh();
   }, [refresh]);
-  const retryDelivery = useCallback(() => mutation.mutate("retry"), [mutation]);
+  const retryDelivery = useCallback(() => {
+    chat.followLatest();
+    mutation.mutate("retry");
+  }, [chat, mutation]);
   const refreshSource = useCallback(() => mutation.mutate("refresh"), [mutation]);
-  const sendFollowup = useCallback(() => mutation.mutate("send"), [mutation]);
+  const sendFollowup = useCallback(() => {
+    chat.followLatest();
+    mutation.mutate("send");
+  }, [chat, mutation]);
   const editFollowup = useCallback(
     (value: string) => {
       edit(value);
@@ -490,13 +498,22 @@ function TaskDetail({
               colors={colors}
               label="Retry delivery"
               icon="RotateCcw"
-              disabled={mutation.isPending || task.state === "paused"}
+              disabled={mutation.isPending}
               onPress={retryDelivery}
             />
           )}
         </View>
       )}
-      <ScrollView style={styles.scroll} contentContainerStyle={styles.body}>
+      <ScrollView
+        ref={chat.ref}
+        accessibilityLabel="Task messages"
+        style={styles.scroll}
+        contentContainerStyle={styles.body}
+        onScroll={chat.onScroll}
+        scrollEventThrottle={16}
+        onContentSizeChange={chat.onResize}
+        onLayout={chat.onResize}
+      >
         <Text style={styles.issueTitle}>{task.issue.title}</Text>
         {tab === "source" && (
           <>
@@ -545,6 +562,16 @@ function TaskDetail({
           />
         )}
       </ScrollView>
+      {chat.showLatest && (
+        <View style={styles.footer}>
+          <Action
+            colors={colors}
+            label="Jump to latest"
+            icon="ArrowDown"
+            onPress={chat.followLatest}
+          />
+        </View>
+      )}
       {showComposer(task, tab) && (
         <TaskComposer
           colors={colors}

@@ -523,11 +523,23 @@ test("opens the unified AI Employees UI beside a local agent and restores its DM
       `
 import * as tasks from "./shared/tasks";
 import { stateRpc } from "./shared/rooms";
-const room = { room: "fixture-room", aiEmployeeId: "fixture-employee", name: "Builder", paused: true, after: 0, createdAt: "2026-10-10T00:00:00Z", activity: "", unread: 0, pending: false, ended: false, historyGap: false, messages: [{ id: "post-1", sender: "employee", text: "Fixture result ready for review", at: "2026-10-10T00:00:00Z", update: false, replyTo: null }] };
+import { defineRpc } from "@getpaseo/plugin";
+import { z } from "zod";
+const room = { room: "fixture-room", aiEmployeeId: "fixture-employee", name: "Builder", paused: true, after: 0, createdAt: "2026-10-10T00:00:00Z", activity: "", unread: 0, pending: false, ended: false, historyGap: false, messages: Array.from({length: 30}, (_, index) => ({ id: "post-" + index, sender: "employee", text: "Saved message " + index + ": " + "Long saved history for testing chat scrolling. ".repeat(8), at: "2026-10-10T00:00:00Z", update: false, replyTo: null })) };
+const taskRoom = {...room, room: "fixture-task-room", messages: [...room.messages]};
+const task = {id: "11111111-1111-4111-8111-111111111111", issue: {id: "22222222-2222-4222-8222-222222222222", identifier: "ENG-42", title: "Fixture scrolling task", description: null, url: "https://linear.app/heygen/issue/ENG-42/fixture", team: {id: "eng", key: "ENG", name: "Engineering"}, organization: {id: "org", name: "Fixture"}, state: {id: "todo", name: "Todo", type: "unstarted"}}, state: "review", createdAt: "2026-10-10", updatedAt: "2026-10-10", events: [], room: taskRoom.room, assignment: {employee: "fixture-employee", name: "Builder", instructions: "Test scrolling", messageId: "m_aaaaaaaaaaaaaaaa", text: "Saved request"}, pending: {id: "m_aaaaaaaaaaaaaaaa", text: "Saved request", phase: "sent", replyReceived: true}};
+const incoming = defineRpc({name: "fixture.incoming", input: z.object({text: z.string(), task: z.boolean().optional()}), output: z.object({ok: z.literal(true)})});
+function append(target, sender, text, id) {
+  target.messages.push({id: id ?? "fixture-" + target.messages.length, sender, text, at: "2026-10-10T00:01:00Z", update: false, replyTo: null});
+}
 export default function contribute(server) {
   server.handle(tasks.directStateRpc, () => ({ employees: [], conversations: [room] }));
   server.handle(tasks.directReadRpc, () => ({ ok: true }));
-  server.handle(tasks.tasksListRpc, () => ({ tasks: [], linearConfigured: true }));
+  server.handle(tasks.directSendRpc, input => {append(room, "you", input.text, input.id); room.paused = false; return {id: input.id};});
+  server.handle(incoming, input => {append(input.task ? taskRoom : room, "employee", input.text); return {ok: true};});
+  server.handle(tasks.tasksListRpc, () => ({ tasks: [task], linearConfigured: true }));
+  server.handle(tasks.detailTaskRpc, () => ({task, conversation: taskRoom}));
+  server.handle(tasks.sendTaskRpc, input => {append(taskRoom, "you", input.text, input.id); taskRoom.paused = false; task.pending = {id: input.id, text: input.text, phase: "sent", replyReceived: false}; return task;});
   server.handle(stateRpc, () => ({ employees: [], conversations: [] }));
   return () => {};
 }`,
@@ -550,6 +562,42 @@ export default function contribute(server) {
     await entry.click();
     await expect(entry.getByText("AI Employees", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Open DM with Builder", exact: true }).click();
+    const transcript = page.getByLabel("Conversation messages", { exact: true });
+    const bottomDistance = () =>
+      transcript.evaluate(
+        (element) => element.scrollHeight - element.clientHeight - element.scrollTop,
+      );
+    await expect.poll(bottomDistance).toBeLessThanOrEqual(2);
+    expect(await transcript.evaluate((element) => element.scrollHeight)).toBeGreaterThan(
+      await transcript.evaluate((element) => element.clientHeight),
+    );
+    await transcript.evaluate((element) => {
+      element.scrollTop = 0;
+    });
+    await expect(page.getByRole("button", { name: "Jump to latest", exact: true })).toBeVisible();
+    await configClient.invokePluginRpc(id, "fixture.incoming", {
+      text: "Incoming while reading history",
+    });
+    await expect(page.getByText("Incoming while reading history", { exact: true })).toBeAttached();
+    await expect
+      .poll(() => transcript.evaluate((element) => element.scrollTop))
+      .toBeLessThanOrEqual(2);
+    await page
+      .getByRole("textbox", { name: "Message Builder", exact: true })
+      .fill("Send from earlier history");
+    await page.getByRole("button", { name: "Send message", exact: true }).click();
+    await expect(page.getByText("Send from earlier history", { exact: true })).toBeAttached();
+    await expect.poll(bottomDistance).toBeLessThanOrEqual(2);
+    const longReply =
+      "Latest incoming reply: " + "This longer answer expands the transcript. ".repeat(60);
+    await configClient.invokePluginRpc(id, "fixture.incoming", { text: longReply });
+    await expect(page.getByText(longReply, { exact: true })).toBeAttached();
+    await expect.poll(bottomDistance).toBeLessThanOrEqual(2);
+    await transcript.evaluate((element) => {
+      element.scrollTop = 0;
+    });
+    await page.getByRole("button", { name: "Jump to latest", exact: true }).click();
+    await expect.poll(bottomDistance).toBeLessThanOrEqual(2);
     await page
       .getByRole("textbox", { name: "Message Builder", exact: true })
       .fill("Keep this employee draft");
@@ -557,6 +605,38 @@ export default function contribute(server) {
     await expect(
       page.getByRole("button", { name: "Needs review filter", exact: true }),
     ).toBeVisible();
+    await page.getByRole("button", { name: "Needs review filter", exact: true }).click();
+    await page.getByRole("button", { name: "Open ENG-42", exact: true }).click();
+    const taskTranscript = page.getByLabel("Task messages", { exact: true });
+    const taskBottomDistance = () =>
+      taskTranscript.evaluate(
+        (element) => element.scrollHeight - element.clientHeight - element.scrollTop,
+      );
+    await expect.poll(taskBottomDistance).toBeLessThanOrEqual(2);
+    await taskTranscript.evaluate((element) => {
+      element.scrollTop = 0;
+    });
+    await expect(page.getByRole("button", { name: "Jump to latest", exact: true })).toBeVisible();
+    await configClient.invokePluginRpc(id, "fixture.incoming", {
+      text: "Task reply while reading",
+      task: true,
+    });
+    await expect(page.getByText("Task reply while reading", { exact: true })).toBeAttached();
+    await expect
+      .poll(() => taskTranscript.evaluate((element) => element.scrollTop))
+      .toBeLessThanOrEqual(2);
+    await page
+      .getByRole("textbox", { name: "Task follow-up", exact: true })
+      .fill("Task follow-up from history");
+    await page.getByRole("button", { name: "Send follow-up", exact: true }).click();
+    await expect(page.getByText("Task follow-up from history", { exact: true })).toBeAttached();
+    await expect.poll(taskBottomDistance).toBeLessThanOrEqual(2);
+    await configClient.invokePluginRpc(id, "fixture.incoming", {
+      text: "Latest task reply " + longReply,
+      task: true,
+    });
+    await expect(page.getByText("Latest task reply " + longReply, { exact: true })).toBeAttached();
+    await expect.poll(taskBottomDistance).toBeLessThanOrEqual(2);
     await page.getByRole("button", { name: "Conversations", exact: true }).click();
     await expect(page.getByRole("textbox", { name: "Message Builder", exact: true })).toHaveValue(
       "Keep this employee draft",
@@ -573,6 +653,7 @@ export default function contribute(server) {
     await expect(page.getByRole("textbox", { name: "Message Builder", exact: true })).toHaveValue(
       "Keep this employee draft",
     );
+    await expect.poll(bottomDistance).toBeLessThanOrEqual(2);
     await capture(page, testInfo, "ai-employees-mobile-web");
     await page.setViewportSize(WIDE_VIEWPORT);
     await entry.click();
