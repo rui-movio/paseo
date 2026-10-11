@@ -232,6 +232,23 @@ describe("Linear task inbox", () => {
     expect(f.linear.complete).toHaveBeenCalledExactlyOnceWith(issue, "done");
     expect((await f.service.list()).tasks[0]!.state).toBe("done");
   });
+  it("accepts a follow-up in a paused task without a separate resume action", async () => {
+    const f = await fixture();
+    const task = await f.service.importIssue("ENG-10");
+    await f.service.assign({ taskId: task.id, employee: "emp", instructions: "Fix it." });
+    const room = [...f.states.values()].flatMap((state) => state.conversations)[0]!;
+    room.paused = true;
+    expect((await f.service.detail(task.id)).task.state).toBe("paused");
+    const sent = await f.service.send({
+      taskId: task.id,
+      id: "m_aaaaaaaaaaaaaaaa",
+      text: "Continue",
+    });
+    expect(sent.state).toBe("working");
+    expect(sent.pending?.phase).toBe("sent");
+    expect(f.opened).toHaveLength(1);
+    expect(f.sent[1]).toMatchObject({ text: "Continue", id: "m_aaaaaaaaaaaaaaaa" });
+  });
   it("preserves an unconfirmed request through resume instead of overwriting it with a follow-up", async () => {
     const f = await fixture();
     const task = await f.service.importIssue("ENG-10");
@@ -240,7 +257,6 @@ describe("Linear task inbox", () => {
     const room = [...f.states.values()].flatMap((state) => state.conversations)[0]!;
     room.paused = true;
     await f.service.detail(task.id);
-    await f.service.resume(task.id);
     await expect(
       f.service.send({ taskId: task.id, id: "m_aaaaaaaaaaaaaaaa", text: "Another task" }),
     ).rejects.toThrow("outstanding reply");

@@ -6,7 +6,7 @@ import { useHubState } from "./hub-state.js";
 import { useToast } from "@getpaseo/plugin/client/react-native";
 import { Directory, Detail, EmptyConversation } from "./conversations.js";
 import { useStyles, type Colors, type Conversation, type Employee } from "./appearance.js";
-import { stateRpc, openRpc, sendRpc, readRpc, endRpc, resumeRpc } from "../shared/rooms.js";
+import { stateRpc, openRpc, sendRpc, readRpc, endRpc } from "../shared/rooms.js";
 
 interface DraftState {
   selected: string | null;
@@ -58,7 +58,6 @@ export function AgentHistory(props: PluginAgentPanelProps) {
   const sendMessage = useRpc(sendRpc);
   const readRoom = useRpc(readRpc);
   const endRoom = useRpc(endRpc);
-  const resumeRoom = useRpc(resumeRpc);
   const queryClient = useQueryClient();
   const toast = useToast();
   const agentTitle = useAgent(props.agentId, (agent) => agent.title);
@@ -112,11 +111,6 @@ export function AgentHistory(props: PluginAgentPanelProps) {
     onSuccess: refresh,
     onError: failure,
   });
-  const resume = useMutation({
-    mutationFn: (room: string) => resumeRoom({ ...scope, room }),
-    onSuccess: refresh,
-    onError: failure,
-  });
   const mark = useMutation({
     mutationFn: (room: string) => readRoom({ ...scope, room }),
     onSuccess: refresh,
@@ -125,16 +119,6 @@ export function AgentHistory(props: PluginAgentPanelProps) {
   const end = useMutation({
     mutationFn: (room: string) => endRoom({ ...scope, room }),
     onSuccess: refresh,
-    onError: failure,
-  });
-  const forward = useMutation({
-    mutationFn: (text: string) => {
-      const append = props.navigation?.appendToAgentDraft;
-      if (!append)
-        throw new Error("Update the Paseo client to forward employee replies into a draft.");
-      return append({ agentId: props.agentId, text });
-    },
-    onSuccess: () => toast.show("Quote added to the agent’s draft. Review it before sending."),
     onError: failure,
   });
   const select = useCallback(
@@ -193,17 +177,12 @@ export function AgentHistory(props: PluginAgentPanelProps) {
             text={draftText(draft, selected.room)}
             draftId={draft.ids[selected.room]}
             sending={send.isPending || resend.isPending}
-            resuming={resume.isPending}
             ending={end.isPending}
-            forwarding={forward.isPending}
-            canForward={Boolean(props.navigation?.appendToAgentDraft)}
             onDirectory={directory}
             onEdit={edit}
             onSend={send.mutate}
             onRetry={resend.mutate}
-            onResume={resume.mutate}
             onEnd={end.mutate}
-            onForward={forward.mutate}
             agentTitle={agentTitle}
             employeeStatus={
               employees.find((employee) => employee.ai_employee_id === selected.aiEmployeeId)

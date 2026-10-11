@@ -13,9 +13,8 @@ compatible panes. Compact layouts use one list or detail at a time.
 The full screen and side pane show the same global DMs and tasks. Switching tabs or
 moving between them retains your selection and unsent draft during this app session.
 Drafts are not restored after an app reload. Host/account history remains durable as
-described below. **Send to local agent** adds an attributed reply to the chosen
-agent's existing draft for review. It never submits a turn or automatically exposes
-an employee conversation to the agent.
+described below. Employee replies remain in AI Employees; opening its pane does not
+share them with the local agent.
 
 ## Linear tasks
 
@@ -49,8 +48,10 @@ Task state and activity are saved privately under
 `$PASEO_HOME/employee-tasks/<Genesis account key>.json`, using atomic writes. The room
 bridge saves its transcript separately. Restarting never replays an assignment. An
 unconfirmed delivery exposes **Retry delivery**, preserving the original message ID,
-body, and recipient. **Resume conversation** obtains a fresh room session without
-sending; an unanswered resumed conversation cannot be completed until a result arrives.
+body, and recipient. Your next message automatically reconnects a paused conversation
+to the same recipient with recent confirmed history as context. Opening a conversation
+never reconnects or sends by itself. Uncertain delivery still requires an explicit retry;
+a task cannot be completed until a correlated result arrives.
 
 Linear snapshots update on import, **Refresh issue**, and explicit Linear completion.
 V1 does not automatically synchronize all Linear issues, ingest Slack, post Slack
@@ -83,10 +84,6 @@ for its correlated reply. Admission state prevents another agent question from
 overtaking an outstanding answer. Employee replies do not automatically create a
 local agent turn.
 
-**Send to local agent** appends an attributed quote to the existing composer draft. It
-preserves current text, pending keystrokes, and attachments, and requires the user to
-send the draft. Older clients without the draft capability hide that button.
-
 The daemon plugin keeps room credentials private. Session opening hooks issue fresh
 local MCP capabilities after create, resume, refresh, or import; archiving an agent or
 unloading the plugin invalidates them. The shared bridge owns employee grants and
@@ -102,17 +99,20 @@ by Genesis account, workspace, and agent. Restarting the bridge restores saved
 messages, including ended DMs. History is not synchronized between machines. Messages from before this upgrade can only be recovered while
 still retained by the employee pod; the panel reports gaps.
 
-An expired employee session pauses its DM. **Resume conversation** opens a fresh
-employee session without sending anything. Your next explicit message includes up
+An expired employee session pauses its DM. Sending your next message automatically
+opens a fresh session with the same recipient. That message includes up
 to 20 recent confirmed messages (at most 24 KiB) as quoted context. This preserves
 continuity without restoring the employee engine's exact state. A failed send is
 marked **Delivery unconfirmed**; **Retry message** reuses the original message ID.
+
+Conversations open at the latest message. Sending jumps to the bottom; incoming replies
+follow while you are near the bottom. Scrolling back keeps your reading position, with
+**Jump to latest** available to return. This applies to DMs and task conversations.
 
 On desktop and web, **Enter** sends and **Shift+Enter** inserts a newline. IME
 confirmation and held Enter do not send. The mobile multiline keyboard keeps its
 normal behavior. Install the matching hg-connect bridge build; the panel checks
 its history and resume capabilities once on connection.
 
-Install the matching Paseo client and daemon to use draft forwarding. The plugin SDK
-launch hooks and draft capability are described in
+The plugin SDK launch hooks are described in
 [the plugin reference](../public-docs/plugins/reference.md).

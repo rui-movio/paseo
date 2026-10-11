@@ -1,3 +1,4 @@
+import { useChatScroll } from "./chat-scroll.js";
 import { Choice } from "./choice.js";
 import { useCallback, useMemo, useState } from "react";
 import {
@@ -17,7 +18,6 @@ import { Action, Avatar } from "./conversations.js";
 import type { Colors } from "./appearance.js";
 import { Recipients, type Recipient } from "./recipients.js";
 import { useTaskStyles } from "./task-appearance.js";
-import { quoteMessage } from "../shared/rooms.js";
 import { useHubState } from "./hub-state.js";
 
 export const views = [
@@ -52,11 +52,6 @@ export function TaskQueue(
   const [importing, setImporting] = useState(false);
   const list = useRpc(rpc.tasksListRpc);
   const view = props.view;
-  const forwardToAgent = useMemo(() => {
-    const append = props.navigation?.appendToAgentDraft;
-    const agentId = props.agentId;
-    return append && agentId ? (quote: string) => append({ agentId, text: quote }) : undefined;
-  }, [props.navigation, props.agentId]);
   const query = useQuery({
     queryKey: ["employee-tasks", props.host.id],
     queryFn: () => list({}),
@@ -196,7 +191,6 @@ export function TaskQueue(
               compact={props.layout.compact}
               active={props.active}
               onBack={goBack}
-              onForward={forwardToAgent}
             />
           ) : (
             <View style={styles.empty}>
@@ -363,7 +357,6 @@ function TaskDetail({
   compact,
   onBack,
   active,
-  onForward,
 }: {
   id: string;
   host: string;
@@ -371,7 +364,6 @@ function TaskDetail({
   compact: boolean;
   active: boolean;
   onBack: () => void;
-  onForward?: (text: string) => Promise<void>;
 }) {
   const styles = useTaskStyles(colors);
   const [tab, setTab] = useState("conversation");
@@ -386,7 +378,6 @@ function TaskDetail({
   const detail = useRpc(rpc.detailTaskRpc);
   const send = useRpc(rpc.sendTaskRpc);
   const retry = useRpc(rpc.retryTaskRpc);
-  const resume = useRpc(rpc.resumeTaskRpc);
   const refreshIssue = useRpc(rpc.issueRefreshRpc);
   const cache = useQueryClient();
   const toast = useToast();
@@ -405,10 +396,9 @@ function TaskDetail({
     retry: false,
   });
   const mutation = useMutation({
-    mutationFn: (action: "send" | "retry" | "resume" | "refresh") => {
+    mutationFn: (action: "send" | "retry" | "refresh") => {
       if (action === "send") return send({ taskId: id, text, id: draftId ?? newMessageId() });
       if (action === "retry") return retry({ taskId: id });
-      if (action === "resume") return resume({ taskId: id });
       return refreshIssue({ taskId: id });
     },
     onSuccess: async (task, action) => {
@@ -423,6 +413,7 @@ function TaskDetail({
   });
   const task = query.data?.task;
   const conversation = query.data?.conversation;
+  const chat = useChatScroll(conversation, tab === "conversation");
   const startAssignment = useCallback(() => setAssigning(true), []);
   const closeAssignment = useCallback(() => setAssigning(false), []);
   const startCompletion = useCallback(() => setCompleting(true), []);
@@ -435,10 +426,15 @@ function TaskDetail({
     setCompleting(false);
     void refresh();
   }, [refresh]);
-  const retryDelivery = useCallback(() => mutation.mutate("retry"), [mutation]);
-  const resumeConversation = useCallback(() => mutation.mutate("resume"), [mutation]);
+  const retryDelivery = useCallback(() => {
+    chat.followLatest();
+    mutation.mutate("retry");
+  }, [chat, mutation]);
   const refreshSource = useCallback(() => mutation.mutate("refresh"), [mutation]);
-  const sendFollowup = useCallback(() => mutation.mutate("send"), [mutation]);
+  const sendFollowup = useCallback(() => {
+    chat.followLatest();
+    mutation.mutate("send");
+  }, [chat, mutation]);
   const editFollowup = useCallback(
     (value: string) => {
       edit(value);
@@ -450,13 +446,6 @@ function TaskDetail({
     if (task)
       void openExternalUrl(task.issue.url).catch((error: Error) => toast.error(error.message));
   }, [task, toast]);
-  const forwarding = useMutation({
-    mutationFn: (quote: string) => onForward!(quote),
-    onSuccess: () =>
-      toast.show("Quote added to the local agent’s draft. Review it before sending."),
-    onError: (error: Error) => toast.error(error.message),
-  });
-  const forwardReply = useCallback((quote: string) => forwarding.mutate(quote), [forwarding]);
   if (!task)
     return (
       <View style={styles.empty}>
@@ -509,13 +498,22 @@ function TaskDetail({
               colors={colors}
               label="Retry delivery"
               icon="RotateCcw"
-              disabled={mutation.isPending || task.state === "paused"}
+              disabled={mutation.isPending}
               onPress={retryDelivery}
             />
           )}
         </View>
       )}
-      <ScrollView style={styles.scroll} contentContainerStyle={styles.body}>
+      <ScrollView
+        ref={chat.ref}
+        accessibilityLabel="Task messages"
+        style={styles.scroll}
+        contentContainerStyle={styles.body}
+        onScroll={chat.onScroll}
+        scrollEventThrottle={16}
+        onContentSizeChange={chat.onResize}
+        onLayout={chat.onResize}
+      >
         <Text style={styles.issueTitle}>{task.issue.title}</Text>
         {tab === "source" && (
           <>
@@ -559,15 +557,21 @@ function TaskDetail({
             task={task}
             conversation={conversation}
             colors={colors}
-            busy={mutation.isPending}
             onAssign={startAssignment}
             onComplete={startCompletion}
-            onResume={resumeConversation}
-            onForward={onForward ? forwardReply : undefined}
-            forwarding={forwarding.isPending}
           />
         )}
       </ScrollView>
+      {chat.showLatest && (
+        <View style={styles.footer}>
+          <Action
+            colors={colors}
+            label="Jump to latest"
+            icon="ArrowDown"
+            onPress={chat.followLatest}
+          />
+        </View>
+      )}
       {showComposer(task, tab) && (
         <TaskComposer
           colors={colors}
@@ -862,22 +866,14 @@ function TaskTranscript({
   task,
   conversation,
   colors,
-  busy,
   onAssign,
   onComplete,
-  onResume,
-  onForward,
-  forwarding,
 }: {
   task: Task;
   conversation?: import("./appearance.js").Conversation;
   colors: Colors;
-  busy: boolean;
   onAssign: () => void;
   onComplete: () => void;
-  onResume: () => void;
-  onForward?: (text: string) => void;
-  forwarding: boolean;
 }) {
   const styles = useTaskStyles(colors);
   return (
@@ -927,15 +923,6 @@ function TaskTranscript({
                 ? `Assigned ${task.issue.identifier}\n\n${task.assignment.instructions}`
                 : message.text}
             </Text>
-            {message.sender === "employee" && onForward && (
-              <TaskReplyAction
-                colors={colors}
-                name={task.assignment?.name ?? "Employee"}
-                message={message}
-                forwarding={forwarding}
-                onForward={onForward}
-              />
-            )}
             {message.delivery === "unconfirmed" && (
               <Text style={styles.small}>Delivery unconfirmed · Retry preserves this request</Text>
             )}
@@ -956,21 +943,6 @@ function TaskTranscript({
             label="Review and complete"
             icon="CircleCheck"
             onPress={onComplete}
-          />
-        </View>
-      )}
-      {task.state === "paused" && (
-        <View style={styles.card}>
-          <Text style={styles.title}>Conversation paused</Text>
-          <Text style={styles.muted}>
-            The history is saved. Resume the same target, then send a follow-up to continue.
-          </Text>
-          <Action
-            colors={colors}
-            label="Resume conversation"
-            icon="RotateCcw"
-            disabled={busy}
-            onPress={onResume}
           />
         </View>
       )}
@@ -1020,7 +992,7 @@ function completionLabel(publish: boolean) {
 }
 
 function canSendTask(task: Task, error?: string) {
-  return task.state === "review" && task.pending?.phase === "sent" && !error;
+  return ["review", "paused"].includes(task.state) && task.pending?.phase === "sent" && !error;
 }
 function taskBanner(task: Task, error?: string) {
   return (
@@ -1035,35 +1007,5 @@ function needsRetry(task: Task) {
   return Boolean(task.pending && task.pending.phase !== "sent");
 }
 function showComposer(task: Task, tab: string) {
-  return (
-    tab === "conversation" && task.assignment && task.state !== "done" && task.state !== "paused"
-  );
-}
-
-function TaskReplyAction({
-  colors,
-  name,
-  message,
-  forwarding,
-  onForward,
-}: {
-  colors: Colors;
-  name: string;
-  message: import("../shared/rooms.js").Message;
-  forwarding: boolean;
-  onForward: (text: string) => void;
-}) {
-  const send = useCallback(
-    () => onForward(quoteMessage(name, message)),
-    [name, message, onForward],
-  );
-  return (
-    <Action
-      colors={colors}
-      label="Send to local agent"
-      icon="CornerUpLeft"
-      disabled={forwarding}
-      onPress={send}
-    />
-  );
+  return tab === "conversation" && task.assignment && task.state !== "done";
 }

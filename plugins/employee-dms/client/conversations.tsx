@@ -1,3 +1,4 @@
+import { useChatScroll } from "./chat-scroll.js";
 import { useCallback, useMemo, useReducer, useState, type ReactNode } from "react";
 import {
   Platform,
@@ -10,7 +11,7 @@ import {
   type ViewStyle,
 } from "react-native";
 import { Icon, Modal, ScrollView, TextInput } from "@getpaseo/plugin/client/react-native";
-import { quoteMessage, type Message } from "../shared/rooms.js";
+import { type Message } from "../shared/rooms.js";
 import {
   avatarColor,
   initials,
@@ -405,18 +406,13 @@ export interface DetailProps {
   draftId?: string;
   sending: boolean;
   ending: boolean;
-  resuming: boolean;
-  forwarding: boolean;
-  canForward: boolean;
   agentTitle: string | null;
   employeeStatus?: string;
   onDirectory: () => void;
   onEdit: (room: string, text: string) => void;
   onSend: (input: { room: string; text: string; id: string }) => void;
   onRetry: (input: { room: string; text: string; id: string }) => void;
-  onResume: (room: string) => void;
   onEnd: (room: string) => void;
-  onForward: (text: string) => void;
   onAgent?: () => void;
   newId: () => string;
   standalone?: boolean;
@@ -425,6 +421,21 @@ export function Detail(props: DetailProps) {
   const { room, colors } = props;
   const styles = useStyles(colors);
   const [confirmEnd, setConfirmEnd] = useState(false);
+  const chat = useChatScroll(room);
+  const send = useCallback(
+    (input: { room: string; text: string; id: string }) => {
+      chat.followLatest();
+      props.onSend(input);
+    },
+    [chat, props],
+  );
+  const retry = useCallback(
+    (input: { room: string; text: string; id: string }) => {
+      chat.followLatest();
+      props.onRetry(input);
+    },
+    [chat, props],
+  );
   const endStyle = useMemo(() => [styles.quietButton, styles.dialogEnd], [styles]);
   const requestEnd = useCallback(() => setConfirmEnd(true), []);
   const cancelEnd = useCallback(() => setConfirmEnd(false), []);
@@ -433,8 +444,8 @@ export function Detail(props: DetailProps) {
     props.onEnd(room.room);
   }, [props, room.room]);
   const status = conversationStatus(room, props.employeeStatus);
-  const retryDisabled =
-    props.sending || props.resuming || room.pending || room.paused === true || room.ended;
+  const retryDisabled = props.sending || room.pending || room.ended;
+  const composerProps = useMemo(() => ({ ...props, onSend: send }), [props, send]);
   return (
     <View style={styles.conversation}>
       <View style={styles.header}>
@@ -475,7 +486,7 @@ export function Detail(props: DetailProps) {
         <Text style={styles.contextText} numberOfLines={2}>
           {props.standalone
             ? "Direct conversation · History is saved on this host"
-            : `Linked to ${props.agentTitle ?? "your local agent"}. Forward a reply when you want to share it.`}
+            : `Linked to ${props.agentTitle ?? "your local agent"}.`}
         </Text>
       </View>
       {room.historyGap && (
@@ -483,7 +494,16 @@ export function Detail(props: DetailProps) {
           Some earlier messages were not saved before the employee session ended.
         </Text>
       )}
-      <ScrollView style={styles.scroll} contentContainerStyle={styles.transcript}>
+      <ScrollView
+        ref={chat.ref}
+        accessibilityLabel="Conversation messages"
+        style={styles.scroll}
+        contentContainerStyle={styles.transcript}
+        onScroll={chat.onScroll}
+        scrollEventThrottle={16}
+        onContentSizeChange={chat.onResize}
+        onLayout={chat.onResize}
+      >
         {!room.messages.length && (
           <>
             <DateDivider colors={colors} at={room.createdAt} />
@@ -506,21 +526,28 @@ export function Detail(props: DetailProps) {
               colors={colors}
               name={room.name}
               message={message}
-              onForward={props.onForward}
-              forwarding={props.forwarding}
-              canForward={props.canForward}
-              onRetry={props.onRetry}
+              onRetry={retry}
               roomId={room.room}
               retryDisabled={retryDisabled}
             />
           </View>
         ))}
       </ScrollView>
+      {chat.showLatest && (
+        <View style={styles.activity}>
+          <Action
+            colors={colors}
+            label="Jump to latest"
+            icon="ArrowDown"
+            onPress={chat.followLatest}
+          />
+        </View>
+      )}
       <View style={styles.activity}>
         {room.pending && <Icon name="Ellipsis" size={15} color={colors.foregroundMuted} />}
         <Text style={styles.small}>{activity(room)}</Text>
       </View>
-      <ConversationComposer detail={props} />
+      <ConversationComposer detail={composerProps} />
       <Modal title={`End DM with ${room.name}?`} open={confirmEnd} onOpenChange={setConfirmEnd}>
         <Modal.Content>
           <Text style={styles.text}>
@@ -551,30 +578,11 @@ export function Detail(props: DetailProps) {
 
 function conversationStatus(room: Conversation, employeeStatus: string | undefined): string {
   if (room.ended) return "DM ended";
-  if (room.paused) return "Session paused";
   if (room.pending) return "Thinking…";
   return availability(employeeStatus ?? "Unknown");
 }
 function ConversationComposer({ detail }: { detail: DetailProps }) {
-  const styles = useStyles(detail.colors);
-  const resume = useCallback(() => detail.onResume(detail.room.room), [detail]);
-  if (detail.room.ended) return null;
-  if (!detail.room.paused) return <Composer detail={detail} />;
-  return (
-    <View style={styles.banner}>
-      <Text style={styles.small}>
-        Your history is saved. Resume opens a new employee session; your next message includes
-        recent history as context.
-      </Text>
-      <Action
-        colors={detail.colors}
-        label={detail.resuming ? "Resuming…" : "Resume conversation"}
-        icon="RotateCcw"
-        disabled={detail.resuming}
-        onPress={resume}
-      />
-    </View>
-  );
+  return detail.room.ended ? null : <Composer detail={detail} />;
 }
 
 function differentDay(message: Message, previous: Message | undefined): boolean {
@@ -595,7 +603,6 @@ function DateDivider({ colors, at }: { colors: Colors; at: string }) {
 }
 function activity(room: Conversation): string {
   if (room.ended) return "This DM ended. Start a new one from the directory.";
-  if (room.paused) return "The employee session ended. Resume to continue.";
   if (room.activity) return `${room.name} ${room.activity}`;
   if (room.pending) return `${room.name} is thinking…`;
   return "";
@@ -608,9 +615,6 @@ function MessageRow({
   colors,
   name,
   message,
-  onForward,
-  forwarding,
-  canForward,
   onRetry,
   roomId,
   retryDisabled,
@@ -618,18 +622,11 @@ function MessageRow({
   colors: Colors;
   name: string;
   message: Message;
-  onForward: (text: string) => void;
-  forwarding: boolean;
-  canForward: boolean;
   onRetry: DetailProps["onRetry"];
   roomId: string;
   retryDisabled: boolean;
 }) {
   const styles = useStyles(colors);
-  const forward = useCallback(
-    () => onForward(quoteMessage(name, message)),
-    [onForward, name, message],
-  );
   const retry = useCallback(
     () => onRetry({ room: roomId, text: message.text, id: message.id }),
     [onRetry, roomId, message],
@@ -658,17 +655,6 @@ function MessageRow({
               icon="RotateCcw"
               disabled={retryDisabled}
               onPress={retry}
-            />
-          </View>
-        )}
-        {message.sender === "employee" && canForward && (
-          <View style={styles.messageActions}>
-            <Action
-              colors={colors}
-              label="Send to local agent"
-              icon="ArrowUpRight"
-              disabled={forwarding}
-              onPress={forward}
             />
           </View>
         )}

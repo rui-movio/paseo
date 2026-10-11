@@ -180,6 +180,63 @@ describe("Linear task UI", () => {
       }),
     );
   });
+  it.each(["sent", "unconfirmed"] as const)(
+    "keeps paused task %s delivery usable without a Resume action",
+    async (phase) => {
+      const paused: Task = {
+        ...task,
+        state: "paused",
+        room: "r_one",
+        assignment: {
+          employee: "emp",
+          name: "Jerry",
+          instructions: "Fix it",
+          messageId: "m_aaaaaaaaaaaaaaaa",
+          text: "Saved request",
+        },
+        pending: { id: "m_aaaaaaaaaaaaaaaa", text: "Saved request", phase },
+        error: phase === "unconfirmed" ? "Lost acknowledgement" : undefined,
+      };
+      fixtures.calls.set(
+        "tasks.list",
+        vi.fn(async () => ({ tasks: [paused], linearConfigured: true })),
+      );
+      fixtures.calls.set(
+        "tasks.detail",
+        vi.fn(async () => ({ task: paused })),
+      );
+      const send = vi.fn(async () => paused);
+      fixtures.calls.set("tasks.send", send);
+      const retry = vi.fn(async () => paused);
+      fixtures.calls.set("tasks.retry", retry);
+      const screen = mount(<TaskQueue {...props()} view="tasks" onFilter={ignore} active />);
+      fireEvent.click(await screen.findByLabelText("Open ENG-42"));
+      const input = await screen.findByLabelText("Task follow-up");
+      expect(screen.queryByLabelText("Resume conversation")).toBeNull();
+      expect(send).not.toHaveBeenCalled();
+      fireEvent.change(input, { target: { value: "Continue" } });
+      if (phase === "unconfirmed") {
+        await waitFor(() =>
+          expect(screen.getByLabelText("Send follow-up").getAttribute("aria-disabled")).toBe(
+            "true",
+          ),
+        );
+        fireEvent.keyDown(input, { key: "Enter" });
+        expect(send).not.toHaveBeenCalled();
+        fireEvent.click(screen.getByLabelText("Retry delivery"));
+        await waitFor(() => expect(retry).toHaveBeenCalledExactlyOnceWith({ taskId: task.id }));
+        return;
+      }
+      await waitFor(() =>
+        expect(screen.getByLabelText("Send follow-up").getAttribute("aria-disabled")).not.toBe(
+          "true",
+        ),
+      );
+      fireEvent.keyDown(input, { key: "Enter" });
+      await waitFor(() => expect(send).toHaveBeenCalledOnce());
+      expect(send.mock.calls[0]).toBeDefined();
+    },
+  );
   it("sends on Enter and preserves Shift+Enter and IME composition", () => {
     const send = vi.fn();
     const edit = vi.fn();
@@ -284,7 +341,7 @@ describe("AI Employees hub", () => {
       "Please check one more thing",
     );
   });
-  it("shares a reply only after the user chooses Send to local agent", async () => {
+  it("keeps employee replies separate from the local agent draft", async () => {
     seed();
     const append = vi.fn(async () => {});
     const open = vi.fn();
@@ -294,14 +351,8 @@ describe("AI Employees hub", () => {
     );
     fireEvent.click(await screen.findByLabelText("Open DM with Jerry"));
     await screen.findByText("The fix is ready");
+    expect(screen.queryByLabelText("Send to local agent")).toBeNull();
     expect(append).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByLabelText("Send to local agent"));
-    await waitFor(() =>
-      expect(append).toHaveBeenCalledWith({
-        agentId: "local",
-        text: expect.stringContaining("The fix is ready"),
-      }),
-    );
     expect(open).not.toHaveBeenCalled();
     expect(fixtures.calls.has("employees.direct.send")).toBe(false);
   });

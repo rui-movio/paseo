@@ -196,8 +196,7 @@ function AgentPicker(
           ))}
         </ScrollView>
         <Text style={styles.small}>
-          Share replies with the local agent using Send to local agent. Opening the pane does not
-          send a message.
+          Opening the pane does not send a message to the local agent or an employee.
         </Text>
       </Modal.Content>
     </Modal>

@@ -23,6 +23,7 @@ type NewWorkspaceDaemonClient = Pick<
   | "getDaemonConfig"
   | "installDirectoryPlugin"
   | "installPluginSource"
+  | "invokePluginRpc"
   | "disablePlugin"
   | "enablePlugin"
   | "inspectWorkspaceRecovery"
