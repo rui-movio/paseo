@@ -3,19 +3,29 @@ import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginScreenProps } from "@getpaseo/plugin/client";
-import { TaskComposer, TaskInbox } from "./tasks.js";
+import { EmployeeHub, EmployeeNavigation } from "./hub.js";
+import { TaskComposer, TaskQueue } from "./tasks.js";
 import { Recipients } from "./recipients.js";
 import type { Colors } from "./appearance.js";
 import type { Task } from "../shared/tasks.js";
 const fixtures = vi.hoisted(() => ({
   calls: new Map<string, ReturnType<typeof vi.fn>>(),
   toast: vi.fn(),
+  agents: vi.fn(),
 }));
 vi.mock("@getpaseo/plugin/client", () => ({
   useRpc: (contract: { name: string }) =>
     fixtures.calls.get(contract.name) ??
     (() => Promise.reject(new Error(`Unexpected ${contract.name}`))),
+  usePaseo: () => ({ agents: { list: fixtures.agents } }),
   openExternalUrl: vi.fn(async () => {}),
+}));
+vi.mock("@getpaseo/plugin/client/ui", () => ({
+  SidebarRow: ({ label, onPress }: { label: string; onPress: () => void }) => (
+    <button type="button" onClick={onPress}>
+      {label}
+    </button>
+  ),
 }));
 vi.mock("@getpaseo/plugin/client/react-native", async () => {
   const native = await import("react-native");
@@ -33,7 +43,7 @@ vi.mock("@getpaseo/plugin/client/react-native", async () => {
     ScrollView: native.ScrollView,
     Icon: () => null,
     Modal,
-    useToast: () => ({ error: fixtures.toast }),
+    useToast: () => ({ error: fixtures.toast, show: fixtures.toast }),
   };
 });
 const colors = new Proxy({}, { get: () => "#888888" }) as Colors;
@@ -86,7 +96,7 @@ describe("Linear task UI", () => {
       "tasks.detail",
       vi.fn(async () => ({ task })),
     );
-    const screen = mount(<TaskInbox {...props(true)} />);
+    const screen = mount(<TaskQueue {...props(true)} view="inbox" onFilter={ignore} active />);
     fireEvent.click(await screen.findByLabelText("Open ENG-42"));
     expect(await screen.findByText("Choose who should take this on")).toBeTruthy();
     expect(screen.queryByLabelText("Open ENG-42")).toBeNull();
@@ -157,7 +167,7 @@ describe("Linear task UI", () => {
     const complete = vi.fn(async () => ({ ...ready, state: "done" }));
     fixtures.calls.set("tasks.complete", complete);
     const reviewProps = { ...props(), params: { view: "review" } };
-    const screen = mount(<TaskInbox {...reviewProps} />);
+    const screen = mount(<TaskQueue {...reviewProps} view="review" onFilter={ignore} active />);
     fireEvent.click(await screen.findByLabelText("Open ENG-42"));
     fireEvent.click(await screen.findByLabelText("Review and complete"));
     expect(await screen.findByLabelText("Done")).toBeTruthy();
@@ -191,3 +201,133 @@ describe("Linear task UI", () => {
     expect(send).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("AI Employees hub", () => {
+  const room = {
+    room: "room_one",
+    session: "session",
+    aiEmployeeId: "emp",
+    name: "Jerry",
+    ended: false,
+    unread: 0,
+    pending: false,
+    createdAt: "2026-10-10T00:00:00Z",
+    messages: [
+      {
+        id: "post_1",
+        sender: "employee",
+        text: "The fix is ready",
+        at: "2026-10-10T00:00:00Z",
+        update: false,
+      },
+    ],
+  };
+  function seed() {
+    fixtures.calls.set(
+      "employees.direct.state",
+      vi.fn(async () => ({ employees: [], conversations: [room] })),
+    );
+    fixtures.calls.set(
+      "employees.direct.read",
+      vi.fn(async () => ({ ok: true })),
+    );
+    fixtures.calls.set(
+      "tasks.list",
+      vi.fn(async () => ({ tasks: [task], linearConfigured: true })),
+    );
+    fixtures.calls.set(
+      "tasks.detail",
+      vi.fn(async () => ({ task })),
+    );
+  }
+  it("contributes one navigation entry", () => {
+    const open = vi.fn();
+    const screen = render(
+      <EmployeeNavigation
+        {...props()}
+        currentScreen={null}
+        openScreen={open}
+        openPopover={ignore}
+      />,
+    );
+    expect(screen.getAllByRole("button")).toHaveLength(1);
+    fireEvent.click(screen.getByText("AI Employees"));
+    expect(open).toHaveBeenCalledWith({ screenId: "inbox" });
+  });
+  it("retains the chosen DM and draft across Tasks and a pane remount", async () => {
+    seed();
+    const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    caches.push(cache);
+    const screen = render(
+      <QueryClientProvider client={cache}>
+        <EmployeeHub {...props(true)} params={emptyParams} />
+      </QueryClientProvider>,
+    );
+    fireEvent.click(await screen.findByLabelText("Open DM with Jerry"));
+    const composer = await screen.findByLabelText("Message Jerry");
+    fireEvent.change(composer, { target: { value: "Please check one more thing" } });
+    fireEvent.click(screen.getByLabelText("Tasks"));
+    fireEvent.click(await screen.findByLabelText("Open ENG-42"));
+    fireEvent.click(screen.getByLabelText("Conversations"));
+    expect((screen.getByLabelText("Message Jerry") as HTMLTextAreaElement).value).toBe(
+      "Please check one more thing",
+    );
+    screen.rerender(
+      <QueryClientProvider client={cache}>
+        <div>
+          <EmployeeHub {...props(true)} params={emptyParams} agentId="local" />
+        </div>
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByText("The fix is ready")).toBeTruthy();
+    expect((screen.getByLabelText("Message Jerry") as HTMLTextAreaElement).value).toBe(
+      "Please check one more thing",
+    );
+  });
+  it("shares a reply only after the user chooses Send to local agent", async () => {
+    seed();
+    const append = vi.fn(async () => {});
+    const open = vi.fn();
+    const navigation = shareNavigation(append, open);
+    const screen = mount(
+      <EmployeeHub {...props(true)} params={emptyParams} agentId="local" navigation={navigation} />,
+    );
+    fireEvent.click(await screen.findByLabelText("Open DM with Jerry"));
+    await screen.findByText("The fix is ready");
+    expect(append).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByLabelText("Send to local agent"));
+    await waitFor(() =>
+      expect(append).toHaveBeenCalledWith({
+        agentId: "local",
+        text: expect.stringContaining("The fix is ready"),
+      }),
+    );
+    expect(open).not.toHaveBeenCalled();
+    expect(fixtures.calls.has("employees.direct.send")).toBe(false);
+  });
+  it("chooses a local session without sending to it or an employee", async () => {
+    seed();
+    fixtures.agents.mockResolvedValue({
+      entries: [
+        { agent: { id: "local", title: "Fix login", cwd: "/repo", workspaceId: "project" } },
+      ],
+      pageInfo: { hasMore: false, nextCursor: null },
+    });
+    const beside = vi.fn();
+    const screen = mount(<EmployeeHub {...props()} params={emptyParams} onOpenBeside={beside} />);
+    fireEvent.click(screen.getByLabelText("Open beside local agent"));
+    fireEvent.click(await screen.findByLabelText("Open beside Fix login"));
+    expect(beside).toHaveBeenCalledExactlyOnceWith({ id: "local", workspaceId: "project" });
+    expect(fixtures.calls.has("employees.direct.send")).toBe(false);
+  });
+});
+
+const ignore = () => {};
+const emptyParams = {};
+
+function shareNavigation(
+  append: (input: { agentId: string; text: string }) => Promise<void>,
+  open: () => void,
+) {
+  return { appendToAgentDraft: append, openAgent: open, openWorkspace: open };
+}

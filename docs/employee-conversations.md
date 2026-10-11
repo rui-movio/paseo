@@ -1,8 +1,21 @@
 # Linear inbox and employee conversations
 
-The global sidebar contains **Inbox**, **Assigned tasks**, **Needs review**, and
-**Conversations**. These screens work without a local coding-agent session. The
-built-in `employee-dms` plugin uses the host's signed-in hg-connect bridge.
+Open **AI Employees** in the sidebar. **Conversations** contains employee and
+teammate DMs; **Tasks** contains the Linear inbox, with **Inbox**, **Assigned**, and
+**Needs review** filters and counts. These views work without a coding-agent session
+and use the selected host's signed-in hg-connect bridge.
+
+On desktop/web, choose **Open beside local agent** and select a coding session on
+that host. AI Employees opens in the reusable, resizable side pane; later opens
+reuse that pane. The panel adapts to its own width. You can move its tab between
+compatible panes. Compact layouts use one list or detail at a time.
+
+The full screen and side pane show the same global DMs and tasks. Switching tabs or
+moving between them retains your selection and unsent draft during this app session.
+Drafts are not restored after an app reload. Host/account history remains durable as
+described below. **Send to local agent** adds an attributed reply to the chosen
+agent's existing draft for review. It never submits a turn or automatically exposes
+an employee conversation to the agent.
 
 ## Linear tasks
 
@@ -48,18 +61,22 @@ they do not synchronize between machines.
 
 ## Direct conversations
 
-**Conversations** opens global host DMs with employees and named teammates. These DMs
+**AI Employees → Conversations** opens global host DMs with employees and named teammates. These DMs
 are separate from task rooms. Expanding teammates requires matching hg-connect, agentd,
 and pod adapter builds, plus a matching ARM build for Hermes targets. Main employee
 DMs remain usable on pods without the new teammate directory.
 
 ## Workspace conversations
 
-Open **Conversations** in a local agent's workspace panel, or use `/room`. The
-built-in `employee-dms` plugin connects to a signed-in `hg-connect` installation.
-Choose **+** beside **Direct messages** to open the **New message** employee picker.
-Search existing DMs in the sidebar or employees in the picker. Each DM belongs to
-its workspace and local agent, and the UI and agent tools use the same transcript.
+`/room` and **Open AI Employees beside local agent** in the Command Center open
+the unified AI Employees panel beside the current coding session. `/room` remains
+a shortcut; it does not open a second employee product.
+
+Existing agent-scoped DMs remain under **Conversations → Local agent history** in
+that panel. They belong to their original workspace and local agent, and the UI and
+agent tools use the same transcript. Choose **Direct messages** to return to global
+DMs. These scopes stay separate so opening the panel does not grant the local agent
+access to your global DMs or task conversations.
 
 `ask_employee`, `read_room`, and `resume_employee` are available to interactive Claude sessions. Other
 providers can use the human DM panel; provider tool support can be added separately.
@@ -67,7 +84,7 @@ A question waits for its correlated reply. Human and agent sends share admission
 state so another question cannot overtake an outstanding answer. Employee posts and
 typing appear in the panel and never create an agent turn.
 
-**Send to agent** appends an attributed quote to the existing composer draft. It
+**Send to local agent** appends an attributed quote to the existing composer draft. It
 preserves current text, pending keystrokes, and attachments, and requires the user to
 send the draft. Older clients without the draft capability hide that button.
 

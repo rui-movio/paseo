@@ -1,312 +1,72 @@
-import { useCallback, useMemo, useReducer } from "react";
-import { Pressable, Text, View } from "react-native";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  useAgent,
-  useRpc,
   type PluginAgentPanelProps,
   type PluginClientContext,
-  type PluginSidebarItemProps,
+  type PluginScreenProps,
+  useAgent,
 } from "@getpaseo/plugin/client";
-import { useToast } from "@getpaseo/plugin/client/react-native";
-import { Directory, Detail, EmptyConversation } from "./client/conversations.js";
-import { useStyles, type Colors, type Conversation, type Employee } from "./client/appearance.js";
-import { stateRpc, openRpc, sendRpc, readRpc, endRpc, resumeRpc } from "./shared/rooms.js";
+import { useCallback } from "react";
+import { EmployeeHub, EmployeeNavigation, type LocalAgent } from "./client/hub.js";
+import { AgentHistory } from "./client/agent-history.js";
 
-import { SidebarRow } from "@getpaseo/plugin/client/ui";
-import { TaskInbox, views } from "./client/tasks.js";
-
-function TaskNavigation(props: PluginSidebarItemProps) {
-  return (
-    <>
-      {views.map((view) => (
-        <TaskNavigationRow key={view.id} view={view} {...props} />
-      ))}
-    </>
-  );
-}
-function TaskNavigationRow({
-  currentScreen,
-  openScreen,
-  view,
-}: PluginSidebarItemProps & { view: (typeof views)[number] }) {
-  const open = useCallback(
-    () => openScreen({ screenId: "inbox", params: { view: view.id } }),
-    [openScreen, view.id],
-  );
-  return (
-    <SidebarRow
-      id={view.id}
-      icon={view.icon}
-      label={view.title}
-      active={
-        currentScreen?.screenId === "inbox" && (currentScreen.params.view ?? "inbox") === view.id
-      }
-      onPress={open}
-    />
-  );
-}
-
-interface DraftState {
-  selected: string | null;
-  directory: boolean;
-  drafts: Record<string, string>;
-  ids: Record<string, string>;
-}
-type DraftAction =
-  | { kind: "select"; room: string }
-  | { kind: "directory" }
-  | { kind: "edit"; room: string; text: string }
-  | { kind: "sent"; room: string };
-function newId(): string {
-  let id = "m_";
-  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  for (let n = 0; n < 16; n++) id += alphabet[Math.floor(Math.random() * alphabet.length)];
-  return id;
-}
-function reduce(state: DraftState, action: DraftAction): DraftState {
-  if (action.kind === "directory") return { ...state, directory: true };
-  if (action.kind === "select") return { ...state, selected: action.room, directory: false };
-  if (action.kind === "sent")
-    return {
-      ...state,
-      drafts: { ...state.drafts, [action.room]: "" },
-      ids: { ...state.ids, [action.room]: newId() },
-    };
-  return {
-    ...state,
-    drafts: { ...state.drafts, [action.room]: action.text },
-    ids: { ...state.ids, [action.room]: newId() },
-  };
-}
-function draftText(state: DraftState, room: string): string {
-  return state.drafts[room] ?? "";
-}
-function connectionError(
-  error: Error | null,
-  state: { connectionError?: string } | undefined,
-): string | undefined {
-  return error?.message ?? state?.connectionError;
-}
-const emptyConversations: Conversation[] = [];
-const emptyEmployees: Employee[] = [];
-
-function Conversations(props: PluginAgentPanelProps) {
-  const getState = useRpc(stateRpc);
-  const openRoom = useRpc(openRpc);
-  const sendMessage = useRpc(sendRpc);
-  const readRoom = useRpc(readRpc);
-  const endRoom = useRpc(endRpc);
-  const resumeRoom = useRpc(resumeRpc);
-  const queryClient = useQueryClient();
-  const toast = useToast();
-  const agentTitle = useAgent(props.agentId, (agent) => agent.title);
-  const [draft, dispatch] = useReducer(reduce, {
-    selected: null,
-    directory: true,
-    drafts: {},
-    ids: {},
-  });
-  const scope = useMemo(
-    () => ({ workspaceId: props.workspaceId, agentId: props.agentId }),
-    [props.workspaceId, props.agentId],
-  );
-  const key = useMemo(
-    () => ["employee-dms", props.workspaceId, props.agentId],
-    [props.workspaceId, props.agentId],
-  );
-  const state = useQuery({
-    queryKey: key,
-    queryFn: () => getState(scope),
-    refetchInterval: 3000,
-    retry: false,
-  });
-  const refresh = useCallback(async () => {
-    await queryClient.invalidateQueries({ queryKey: key });
-  }, [queryClient, key]);
-  const failure = (error: Error) => toast.error(error.message);
-  const open = useMutation({
-    mutationFn: (employee: string) => openRoom({ ...scope, employee }),
-    onSuccess: async (room) => {
-      dispatch({ kind: "select", room: room.room });
-      await refresh();
-    },
-    onError: failure,
-  });
-  const send = useMutation({
-    mutationFn: (input: { room: string; text: string; id: string }) =>
-      sendMessage({ ...scope, ...input }),
-    onSuccess: async (_, input) => {
-      dispatch({ kind: "sent", room: input.room });
-      await refresh();
-    },
-    onError: failure,
-  });
-  const resend = useMutation({
-    mutationFn: (input: { room: string; text: string; id: string }) =>
-      sendMessage({ ...scope, ...input }),
-    onSuccess: refresh,
-    onError: failure,
-  });
-  const resume = useMutation({
-    mutationFn: (room: string) => resumeRoom({ ...scope, room }),
-    onSuccess: refresh,
-    onError: failure,
-  });
-  const mark = useMutation({
-    mutationFn: (room: string) => readRoom({ ...scope, room }),
-    onSuccess: refresh,
-    onError: failure,
-  });
-  const end = useMutation({
-    mutationFn: (room: string) => endRoom({ ...scope, room }),
-    onSuccess: refresh,
-    onError: failure,
-  });
-  const forward = useMutation({
-    mutationFn: (text: string) => {
-      const append = props.navigation?.appendToAgentDraft;
-      if (!append)
-        throw new Error("Update the Paseo client to forward employee replies into a draft.");
-      return append({ agentId: props.agentId, text });
-    },
-    onSuccess: () => toast.show("Quote added to the agent’s draft. Review it before sending."),
-    onError: failure,
-  });
-  const select = useCallback(
-    (room: string) => {
-      dispatch({ kind: "select", room });
-      mark.mutate(room);
-    },
-    [mark],
-  );
-  const directory = useCallback(() => dispatch({ kind: "directory" }), []);
-  const edit = useCallback(
-    (room: string, text: string) => dispatch({ kind: "edit", room, text }),
-    [],
-  );
-  const retry = useCallback(() => {
-    void state.refetch();
-  }, [state]);
-  const conversations = state.data?.conversations ?? emptyConversations;
-  const employees = state.data?.employees ?? emptyEmployees;
-  const selected = conversations.find((room) => room.room === draft.selected) ?? null;
-  const showDirectory = !props.layout.compact || draft.directory || !selected;
-  const showConversation = !props.layout.compact || (!draft.directory && selected !== null);
-  const openAgent = useCallback(() => {
-    props.navigation?.openAgent({ agentId: props.agentId });
-  }, [props.navigation, props.agentId]);
-  const onAgent = props.navigation ? openAgent : undefined;
-  const styles = useStyles(props.theme.colors);
-  return (
-    <View style={styles.screen}>
-      <ConnectionStatus
-        colors={props.theme.colors}
-        loading={state.isPending}
-        error={connectionError(state.error, state.data)}
-        onRetry={retry}
-      />
-      <View style={styles.panes}>
-        {showDirectory && (
-          <Directory
-            colors={props.theme.colors}
-            compact={props.layout.compact}
-            agentTitle={agentTitle}
-            conversations={conversations}
-            employees={employees}
-            selected={draft.selected}
-            onSelect={select}
-            onOpen={open.mutate}
-            opening={open.isPending}
-            onAgent={onAgent}
-          />
-        )}
-        {showConversation && selected && (
-          <Detail
-            colors={props.theme.colors}
-            compact={props.layout.compact}
-            room={selected}
-            text={draftText(draft, selected.room)}
-            draftId={draft.ids[selected.room]}
-            sending={send.isPending || resend.isPending}
-            resuming={resume.isPending}
-            ending={end.isPending}
-            forwarding={forward.isPending}
-            canForward={Boolean(props.navigation?.appendToAgentDraft)}
-            onDirectory={directory}
-            onEdit={edit}
-            onSend={send.mutate}
-            onRetry={resend.mutate}
-            onResume={resume.mutate}
-            onEnd={end.mutate}
-            onForward={forward.mutate}
-            agentTitle={agentTitle}
-            employeeStatus={
-              employees.find((employee) => employee.ai_employee_id === selected.aiEmployeeId)
-                ?.status
-            }
-            onAgent={onAgent}
-            newId={newId}
-          />
-        )}
-        {showConversation && !selected && <EmptyConversation colors={props.theme.colors} />}
-      </View>
-    </View>
-  );
-}
-
-function ConnectionStatus({
-  colors,
-  loading,
-  error,
-  onRetry,
-}: {
-  colors: Colors;
-  loading: boolean;
-  error?: string;
-  onRetry: () => void;
-}) {
-  const styles = useStyles(colors);
-  if (error)
-    return (
-      <View style={styles.banner}>
-        <Text style={styles.danger}>{error}</Text>
-        <Pressable accessibilityRole="button" onPress={onRetry}>
-          <Text style={styles.text}>Retry connection</Text>
-        </Pressable>
-      </View>
-    );
-  if (loading) return <Text style={styles.notice}>Connecting to hg-connect…</Text>;
-  return null;
-}
 export default function contribute(client: PluginClientContext) {
-  client.addScreen({
-    id: "inbox",
-    title: (params) => views.find((view) => view.id === (params.view ?? "inbox"))?.title ?? "Inbox",
-    Component: TaskInbox,
+  function Screen(props: PluginScreenProps) {
+    const openBeside = useCallback(
+      (agent: LocalAgent) =>
+        client.openPanel("conversations", {
+          workspaceId: agent.workspaceId,
+          agentId: agent.id,
+          placement: "beside",
+        }),
+      [],
+    );
+    return <EmployeeHub {...props} onOpenBeside={openBeside} />;
+  }
+  function Panel(props: PluginAgentPanelProps) {
+    const agentTitle = useAgent(props.agentId, (agent) => agent.title);
+    const history = useCallback(
+      (layout: PluginScreenProps["layout"]) => <AgentHistory {...props} layout={layout} />,
+      [props],
+    );
+    return (
+      <EmployeeHub
+        {...props}
+        params={emptyParams}
+        agentId={props.agentId}
+        agentTitle={agentTitle}
+        history={history}
+      />
+    );
+  }
+  // Keep the route and panel IDs so bookmarks and saved tabs still restore.
+  client.addScreen({ id: "inbox", title: "AI Employees", Component: Screen });
+  client.addSidebarHeaderItem({
+    id: "tasks",
+    title: "AI Employees",
+    Component: EmployeeNavigation,
   });
-  client.addSidebarHeaderItem({ id: "tasks", title: "Employee tasks", Component: TaskNavigation });
   client.addWorkspacePanel({
     id: "conversations",
-    title: "Conversations",
-    icon: "MessagesSquare",
+    title: "AI Employees",
+    icon: "Users",
     context: "agent",
     locations: ["workspace", "explorer"],
-    Component: Conversations,
+    Component: Panel,
   });
   client.addCommandCenterItem({
     id: "conversations",
-    title: "Open employee DMs",
-    icon: "MessagesSquare",
+    title: "Open AI Employees beside local agent",
+    icon: "Users",
     context: "agent",
-    onSelect: ({ openPanel }) => openPanel("conversations"),
+    onSelect: ({ openPanel }) => openPanel("conversations", { placement: "beside" }),
   });
   client.addSlashCommand({
     name: "room",
-    description: "Open employee DMs",
+    description: "Open AI Employees beside local agent",
     argumentHint: "",
     context: "agent",
-    onSubmit: ({ openPanel }) => openPanel("conversations"),
+    onSubmit: ({ openPanel }) => openPanel("conversations", { placement: "beside" }),
   });
   return () => {};
 }
+
+const emptyParams = {};

@@ -182,6 +182,7 @@ describe("plugin Command Center contributions", () => {
       rpcValue = (await context.rpc(inspect, { value: 4 })).value;
       context.openSurface("main");
       context.openPanel("details", { location: "explorer" });
+      context.openPanel("details", { placement: "beside" });
     });
     const actions = buildPluginCommandCenterContributions({
       plugins: [installed],
@@ -196,8 +197,10 @@ describe("plugin Command Center contributions", () => {
         openWorkspacePanel(pluginId, panelId, location) {
           opened.push(`${pluginId}/workspace/${panelId}/${location}`);
         },
-        openAgentPanel(pluginId, panelId, agentId, location) {
-          opened.push(`${pluginId}/agent/${panelId}/${agentId}/${location}`);
+        openAgentPanel(pluginId, panelId, agentId, location, placement) {
+          opened.push(
+            `${pluginId}/agent/${panelId}/${agentId}/${location}${placement ? `/${placement}` : ""}`,
+          );
         },
       },
       reportError(error) {
@@ -210,7 +213,11 @@ describe("plugin Command Center contributions", () => {
     expect(rpcValue).toBe(5);
     // Commands use the plugin's one client.
     expect(receivedPaseo).toBe(installed.paseo);
-    expect(opened).toEqual(["review/surface/main", "review/agent/details/agent-1/explorer"]);
+    expect(opened).toEqual([
+      "review/surface/main",
+      "review/agent/details/agent-1/explorer",
+      "review/agent/details/agent-1/workspace/beside",
+    ]);
   });
 
   it("removes every contribution when its installation disappears", () => {

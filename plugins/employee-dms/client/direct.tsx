@@ -1,5 +1,5 @@
 import { Choice } from "./choice.js";
-import { useCallback, useReducer, useState } from "react";
+import { useCallback, useState } from "react";
 import { Text, View } from "react-native";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRpc, type PluginScreenProps } from "@getpaseo/plugin/client";
@@ -9,6 +9,7 @@ import { Action, Avatar, Detail } from "./conversations.js";
 import { useTaskStyles } from "./task-appearance.js";
 import { Recipients, type Recipient } from "./recipients.js";
 import type { Conversation } from "./appearance.js";
+import { useHubState } from "./hub-state.js";
 import { newMessageId } from "./message-id.js";
 
 interface Drafts {
@@ -21,12 +22,18 @@ function drafts(state: Drafts, action: { room: string; text: string }) {
     ids: { ...state.ids, [action.room]: newMessageId() },
   };
 }
-export function DirectMessages(props: PluginScreenProps) {
+export function DirectMessages(
+  props: PluginScreenProps & { active?: boolean; agentId?: string; agentTitle?: string | null },
+) {
   const colors = props.theme.colors;
   const styles = useTaskStyles(colors);
-  const [selected, select] = useState<string | null>(null);
+  const [selected, select] = useHubState<string | null>(props.host.id, "selected-dm", null);
   const [picker, showPicker] = useState(false);
-  const [draft, edit] = useReducer(drafts, { texts: {}, ids: {} });
+  const [draft, setDraft] = useHubState<Drafts>(props.host.id, "dm-drafts", emptyDrafts);
+  const edit = useCallback(
+    (action: { room: string; text: string }) => setDraft((previous) => drafts(previous, action)),
+    [setDraft],
+  );
   const state = useRpc(rpc.directStateRpc);
   const open = useRpc(rpc.directOpenRpc);
   const send = useRpc(rpc.directSendRpc);
@@ -39,6 +46,7 @@ export function DirectMessages(props: PluginScreenProps) {
   const query = useQuery({
     queryKey: ["employee-direct", host],
     queryFn: () => state({}),
+    enabled: props.active !== false,
     refetchInterval: 3000,
     retry: false,
   });
@@ -84,8 +92,18 @@ export function DirectMessages(props: PluginScreenProps) {
     onSuccess: refresh,
     onError: failure,
   });
-  const conversations = query.data ? query.data.conversations : [];
-  const employees = query.data ? query.data.employees : [];
+  const forwarding = useMutation({
+    mutationFn: (text: string) => {
+      if (!props.agentId || !props.navigation?.appendToAgentDraft)
+        throw new Error("Open beside a local agent to share a reply.");
+      return props.navigation.appendToAgentDraft({ agentId: props.agentId, text });
+    },
+    onSuccess: () =>
+      toast.show("Quote added to the local agent’s draft. Review it before sending."),
+    onError: failure,
+  });
+  const forward = useCallback((text: string) => forwarding.mutate(text), [forwarding]);
+  const { conversations, employees } = directData(query.data);
   const room = conversations.find((item) => item.room === selected);
   const error = query.error?.message ?? query.data?.connectionError;
   const chooseRoom = useCallback(
@@ -93,13 +111,13 @@ export function DirectMessages(props: PluginScreenProps) {
       select(item.room);
       marking.mutate(item.room);
     },
-    [marking],
+    [marking, select],
   );
   const openPicker = useCallback(() => showPicker(true), []);
-  const backToDirectory = useCallback(() => select(null), []);
+  const backToDirectory = useCallback(() => select(null), [select]);
   const editMessage = useCallback(
     (roomId: string, text: string) => edit({ room: roomId, text }),
-    [],
+    [edit],
   );
   const reconnect = useCallback(() => {
     void query.refetch();
@@ -178,9 +196,9 @@ export function DirectMessages(props: PluginScreenProps) {
               sending={sending.isPending || retrying.isPending}
               ending={ending.isPending}
               resuming={resuming.isPending}
-              forwarding={false}
-              canForward={false}
-              agentTitle={null}
+              forwarding={forwarding.isPending}
+              canForward={canForward(props)}
+              agentTitle={props.agentTitle ?? null}
               employeeStatus={
                 employees.find((employee) => employee.ai_employee_id === room.aiEmployeeId)?.status
               }
@@ -190,7 +208,7 @@ export function DirectMessages(props: PluginScreenProps) {
               onRetry={retrying.mutate}
               onResume={resuming.mutate}
               onEnd={ending.mutate}
-              onForward={ignoreForward}
+              onForward={forward}
               newId={newMessageId}
             />
           ) : (
@@ -235,4 +253,15 @@ function directStatus(room: Conversation) {
   if (room.paused) return "Paused · history saved";
   return room.target ? "Teammate conversation" : "AI employee";
 }
-function ignoreForward() {}
+const emptyDrafts: Drafts = { texts: {}, ids: {} };
+
+function directData(
+  data:
+    | { conversations: Conversation[]; employees: import("./appearance.js").Employee[] }
+    | undefined,
+) {
+  return { conversations: data?.conversations ?? [], employees: data?.employees ?? [] };
+}
+function canForward(props: PluginScreenProps & { agentId?: string }) {
+  return Boolean(props.agentId && props.navigation?.appendToAgentDraft);
+}
