@@ -2826,6 +2826,54 @@ describe("ClaudeAgentSession context window usage", () => {
     }
   });
 
+  test("result usage reports the active model's context window after a model switch", async () => {
+    const session = await createSessionForTurns(
+      [
+        [
+          { ...createInitMessage(), model: "claude-sonnet-4-6" },
+          createSuccessResult({
+            modelUsage: {
+              "heygen/deepseek-v4.1-flash[1m]": { contextWindow: 1_000_000 },
+              "claude-sonnet-4-6": { contextWindow: 200_000 },
+            },
+          }),
+        ],
+      ],
+      { model: "claude-sonnet-4-6" },
+    );
+
+    try {
+      const result = await session.run("turn");
+      expect(result.usage?.contextWindowMaxTokens).toBe(200_000);
+    } finally {
+      await session.close();
+    }
+  });
+
+  test("result usage keeps a 1M main model's window beside a 200k subagent model", async () => {
+    const session = await createSessionForTurns(
+      [
+        [
+          { ...createInitMessage(), model: "claude-sonnet-5[1m]" },
+          createSuccessResult({
+            modelUsage: {
+              "claude-haiku-4-5": { contextWindow: 200_000 },
+              "claude-sonnet-5[1m]": { contextWindow: 1_000_000 },
+            },
+          }),
+        ],
+      ],
+      { model: "claude-sonnet-5[1m]" },
+    );
+
+    try {
+      const result = await session.run("turn");
+      expect(result.usage?.contextWindowMaxTokens).toBe(1_000_000);
+    } finally {
+      await session.close();
+    }
+  });
+
   test("message_delta stream events update per-request usage", async () => {
     const session = await createSessionForTurns([
       [
