@@ -13,9 +13,8 @@ compatible panes. Compact layouts use one list or detail at a time.
 The full screen and side pane show the same global DMs and tasks. Switching tabs or
 moving between them retains your selection and unsent draft during this app session.
 Drafts are not restored after an app reload. Host/account history remains durable as
-described below. **Send to local agent** adds an attributed reply to the chosen
-agent's existing draft for review. It never submits a turn or automatically exposes
-an employee conversation to the agent.
+described below. Employee replies remain in AI Employees; opening its pane does not
+share them with the local agent.
 
 ## Linear tasks
 
@@ -83,10 +82,6 @@ for its correlated reply. Admission state prevents another agent question from
 overtaking an outstanding answer. Employee replies do not automatically create a
 local agent turn.
 
-**Send to local agent** appends an attributed quote to the existing composer draft. It
-preserves current text, pending keystrokes, and attachments, and requires the user to
-send the draft. Older clients without the draft capability hide that button.
-
 The daemon plugin keeps room credentials private. Session opening hooks issue fresh
 local MCP capabilities after create, resume, refresh, or import; archiving an agent or
 unloading the plugin invalidates them. The shared bridge owns employee grants and
@@ -113,6 +108,5 @@ confirmation and held Enter do not send. The mobile multiline keyboard keeps its
 normal behavior. Install the matching hg-connect bridge build; the panel checks
 its history and resume capabilities once on connection.
 
-Install the matching Paseo client and daemon to use draft forwarding. The plugin SDK
-launch hooks and draft capability are described in
+The plugin SDK launch hooks are described in
 [the plugin reference](../public-docs/plugins/reference.md).

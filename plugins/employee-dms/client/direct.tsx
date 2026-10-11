@@ -92,17 +92,6 @@ export function DirectMessages(
     onSuccess: refresh,
     onError: failure,
   });
-  const forwarding = useMutation({
-    mutationFn: (text: string) => {
-      if (!props.agentId || !props.navigation?.appendToAgentDraft)
-        throw new Error("Open beside a local agent to share a reply.");
-      return props.navigation.appendToAgentDraft({ agentId: props.agentId, text });
-    },
-    onSuccess: () =>
-      toast.show("Quote added to the local agent’s draft. Review it before sending."),
-    onError: failure,
-  });
-  const forward = useCallback((text: string) => forwarding.mutate(text), [forwarding]);
   const { conversations, employees } = directData(query.data);
   const room = conversations.find((item) => item.room === selected);
   const error = query.error?.message ?? query.data?.connectionError;
@@ -196,8 +185,6 @@ export function DirectMessages(
               sending={sending.isPending || retrying.isPending}
               ending={ending.isPending}
               resuming={resuming.isPending}
-              forwarding={forwarding.isPending}
-              canForward={canForward(props)}
               agentTitle={props.agentTitle ?? null}
               employeeStatus={
                 employees.find((employee) => employee.ai_employee_id === room.aiEmployeeId)?.status
@@ -208,7 +195,6 @@ export function DirectMessages(
               onRetry={retrying.mutate}
               onResume={resuming.mutate}
               onEnd={ending.mutate}
-              onForward={forward}
               newId={newMessageId}
             />
           ) : (
@@ -261,7 +247,4 @@ function directData(
     | undefined,
 ) {
   return { conversations: data?.conversations ?? [], employees: data?.employees ?? [] };
-}
-function canForward(props: PluginScreenProps & { agentId?: string }) {
-  return Boolean(props.agentId && props.navigation?.appendToAgentDraft);
 }

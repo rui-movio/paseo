@@ -590,21 +590,24 @@ export default function contribute(server) {
       page.locator('[data-testid^="workspace-pane-"]').filter({ visible: true }),
     ).toHaveCount(2);
     await capture(page, testInfo, "ai-employees-beside-local-agent");
-    await page.getByRole("button", { name: "Send to local agent", exact: true }).click();
+    await expect(
+      page.getByRole("button", { name: "Send to local agent", exact: true }),
+    ).toHaveCount(0);
     await expect(page.getByRole("textbox", { name: "Message agent...", exact: true })).toHaveValue(
-      /Fixture result ready for review/,
+      "",
     );
     await expect(page.getByRole("textbox", { name: "Message Builder", exact: true })).toHaveValue(
       "Keep this employee draft",
     );
     await expect(
       page.getByRole("button", { name: "Local agent history", exact: true }),
-    ).toBeVisible();
+    ).toHaveCount(0);
     // The same tab restores after reload, without creating a second side pane.
     await page.reload();
+    await expect(page.getByRole("button", { name: "Conversations", exact: true })).toBeVisible();
     await expect(
       page.getByRole("button", { name: "Local agent history", exact: true }),
-    ).toBeVisible();
+    ).toHaveCount(0);
     await expect(
       page.locator('[data-testid^="workspace-pane-"]').filter({ visible: true }),
     ).toHaveCount(2);

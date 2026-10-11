@@ -10,7 +10,7 @@ import {
   type ViewStyle,
 } from "react-native";
 import { Icon, Modal, ScrollView, TextInput } from "@getpaseo/plugin/client/react-native";
-import { quoteMessage, type Message } from "../shared/rooms.js";
+import { type Message } from "../shared/rooms.js";
 import {
   avatarColor,
   initials,
@@ -406,8 +406,6 @@ export interface DetailProps {
   sending: boolean;
   ending: boolean;
   resuming: boolean;
-  forwarding: boolean;
-  canForward: boolean;
   agentTitle: string | null;
   employeeStatus?: string;
   onDirectory: () => void;
@@ -416,7 +414,6 @@ export interface DetailProps {
   onRetry: (input: { room: string; text: string; id: string }) => void;
   onResume: (room: string) => void;
   onEnd: (room: string) => void;
-  onForward: (text: string) => void;
   onAgent?: () => void;
   newId: () => string;
   standalone?: boolean;
@@ -475,7 +472,7 @@ export function Detail(props: DetailProps) {
         <Text style={styles.contextText} numberOfLines={2}>
           {props.standalone
             ? "Direct conversation · History is saved on this host"
-            : `Linked to ${props.agentTitle ?? "your local agent"}. Forward a reply when you want to share it.`}
+            : `Linked to ${props.agentTitle ?? "your local agent"}.`}
         </Text>
       </View>
       {room.historyGap && (
@@ -506,9 +503,6 @@ export function Detail(props: DetailProps) {
               colors={colors}
               name={room.name}
               message={message}
-              onForward={props.onForward}
-              forwarding={props.forwarding}
-              canForward={props.canForward}
               onRetry={props.onRetry}
               roomId={room.room}
               retryDisabled={retryDisabled}
@@ -608,9 +602,6 @@ function MessageRow({
   colors,
   name,
   message,
-  onForward,
-  forwarding,
-  canForward,
   onRetry,
   roomId,
   retryDisabled,
@@ -618,18 +609,11 @@ function MessageRow({
   colors: Colors;
   name: string;
   message: Message;
-  onForward: (text: string) => void;
-  forwarding: boolean;
-  canForward: boolean;
   onRetry: DetailProps["onRetry"];
   roomId: string;
   retryDisabled: boolean;
 }) {
   const styles = useStyles(colors);
-  const forward = useCallback(
-    () => onForward(quoteMessage(name, message)),
-    [onForward, name, message],
-  );
   const retry = useCallback(
     () => onRetry({ room: roomId, text: message.text, id: message.id }),
     [onRetry, roomId, message],
@@ -658,17 +642,6 @@ function MessageRow({
               icon="RotateCcw"
               disabled={retryDisabled}
               onPress={retry}
-            />
-          </View>
-        )}
-        {message.sender === "employee" && canForward && (
-          <View style={styles.messageActions}>
-            <Action
-              colors={colors}
-              label="Send to local agent"
-              icon="ArrowUpRight"
-              disabled={forwarding}
-              onPress={forward}
             />
           </View>
         )}

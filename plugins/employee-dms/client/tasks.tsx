@@ -17,7 +17,6 @@ import { Action, Avatar } from "./conversations.js";
 import type { Colors } from "./appearance.js";
 import { Recipients, type Recipient } from "./recipients.js";
 import { useTaskStyles } from "./task-appearance.js";
-import { quoteMessage } from "../shared/rooms.js";
 import { useHubState } from "./hub-state.js";
 
 export const views = [
@@ -52,11 +51,6 @@ export function TaskQueue(
   const [importing, setImporting] = useState(false);
   const list = useRpc(rpc.tasksListRpc);
   const view = props.view;
-  const forwardToAgent = useMemo(() => {
-    const append = props.navigation?.appendToAgentDraft;
-    const agentId = props.agentId;
-    return append && agentId ? (quote: string) => append({ agentId, text: quote }) : undefined;
-  }, [props.navigation, props.agentId]);
   const query = useQuery({
     queryKey: ["employee-tasks", props.host.id],
     queryFn: () => list({}),
@@ -196,7 +190,6 @@ export function TaskQueue(
               compact={props.layout.compact}
               active={props.active}
               onBack={goBack}
-              onForward={forwardToAgent}
             />
           ) : (
             <View style={styles.empty}>
@@ -363,7 +356,6 @@ function TaskDetail({
   compact,
   onBack,
   active,
-  onForward,
 }: {
   id: string;
   host: string;
@@ -371,7 +363,6 @@ function TaskDetail({
   compact: boolean;
   active: boolean;
   onBack: () => void;
-  onForward?: (text: string) => Promise<void>;
 }) {
   const styles = useTaskStyles(colors);
   const [tab, setTab] = useState("conversation");
@@ -450,13 +441,6 @@ function TaskDetail({
     if (task)
       void openExternalUrl(task.issue.url).catch((error: Error) => toast.error(error.message));
   }, [task, toast]);
-  const forwarding = useMutation({
-    mutationFn: (quote: string) => onForward!(quote),
-    onSuccess: () =>
-      toast.show("Quote added to the local agent’s draft. Review it before sending."),
-    onError: (error: Error) => toast.error(error.message),
-  });
-  const forwardReply = useCallback((quote: string) => forwarding.mutate(quote), [forwarding]);
   if (!task)
     return (
       <View style={styles.empty}>
@@ -563,8 +547,6 @@ function TaskDetail({
             onAssign={startAssignment}
             onComplete={startCompletion}
             onResume={resumeConversation}
-            onForward={onForward ? forwardReply : undefined}
-            forwarding={forwarding.isPending}
           />
         )}
       </ScrollView>
@@ -866,8 +848,6 @@ function TaskTranscript({
   onAssign,
   onComplete,
   onResume,
-  onForward,
-  forwarding,
 }: {
   task: Task;
   conversation?: import("./appearance.js").Conversation;
@@ -876,8 +856,6 @@ function TaskTranscript({
   onAssign: () => void;
   onComplete: () => void;
   onResume: () => void;
-  onForward?: (text: string) => void;
-  forwarding: boolean;
 }) {
   const styles = useTaskStyles(colors);
   return (
@@ -927,15 +905,6 @@ function TaskTranscript({
                 ? `Assigned ${task.issue.identifier}\n\n${task.assignment.instructions}`
                 : message.text}
             </Text>
-            {message.sender === "employee" && onForward && (
-              <TaskReplyAction
-                colors={colors}
-                name={task.assignment?.name ?? "Employee"}
-                message={message}
-                forwarding={forwarding}
-                onForward={onForward}
-              />
-            )}
             {message.delivery === "unconfirmed" && (
               <Text style={styles.small}>Delivery unconfirmed · Retry preserves this request</Text>
             )}
@@ -1037,33 +1006,5 @@ function needsRetry(task: Task) {
 function showComposer(task: Task, tab: string) {
   return (
     tab === "conversation" && task.assignment && task.state !== "done" && task.state !== "paused"
-  );
-}
-
-function TaskReplyAction({
-  colors,
-  name,
-  message,
-  forwarding,
-  onForward,
-}: {
-  colors: Colors;
-  name: string;
-  message: import("../shared/rooms.js").Message;
-  forwarding: boolean;
-  onForward: (text: string) => void;
-}) {
-  const send = useCallback(
-    () => onForward(quoteMessage(name, message)),
-    [name, message, onForward],
-  );
-  return (
-    <Action
-      colors={colors}
-      label="Send to local agent"
-      icon="CornerUpLeft"
-      disabled={forwarding}
-      onPress={send}
-    />
   );
 }

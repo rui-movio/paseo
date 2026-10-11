@@ -284,7 +284,7 @@ describe("AI Employees hub", () => {
       "Please check one more thing",
     );
   });
-  it("shares a reply only after the user chooses Send to local agent", async () => {
+  it("keeps employee replies separate from the local agent draft", async () => {
     seed();
     const append = vi.fn(async () => {});
     const open = vi.fn();
@@ -294,14 +294,8 @@ describe("AI Employees hub", () => {
     );
     fireEvent.click(await screen.findByLabelText("Open DM with Jerry"));
     await screen.findByText("The fix is ready");
+    expect(screen.queryByLabelText("Send to local agent")).toBeNull();
     expect(append).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByLabelText("Send to local agent"));
-    await waitFor(() =>
-      expect(append).toHaveBeenCalledWith({
-        agentId: "local",
-        text: expect.stringContaining("The fix is ready"),
-      }),
-    );
     expect(open).not.toHaveBeenCalled();
     expect(fixtures.calls.has("employees.direct.send")).toBe(false);
   });

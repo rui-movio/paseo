@@ -127,16 +127,6 @@ export function AgentHistory(props: PluginAgentPanelProps) {
     onSuccess: refresh,
     onError: failure,
   });
-  const forward = useMutation({
-    mutationFn: (text: string) => {
-      const append = props.navigation?.appendToAgentDraft;
-      if (!append)
-        throw new Error("Update the Paseo client to forward employee replies into a draft.");
-      return append({ agentId: props.agentId, text });
-    },
-    onSuccess: () => toast.show("Quote added to the agent’s draft. Review it before sending."),
-    onError: failure,
-  });
   const select = useCallback(
     (room: string) => {
       dispatch({ kind: "select", room });
@@ -195,15 +185,12 @@ export function AgentHistory(props: PluginAgentPanelProps) {
             sending={send.isPending || resend.isPending}
             resuming={resume.isPending}
             ending={end.isPending}
-            forwarding={forward.isPending}
-            canForward={Boolean(props.navigation?.appendToAgentDraft)}
             onDirectory={directory}
             onEdit={edit}
             onSend={send.mutate}
             onRetry={resend.mutate}
             onResume={resume.mutate}
             onEnd={end.mutate}
-            onForward={forward.mutate}
             agentTitle={agentTitle}
             employeeStatus={
               employees.find((employee) => employee.ai_employee_id === selected.aiEmployeeId)
