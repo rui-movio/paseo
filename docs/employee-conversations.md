@@ -106,6 +106,13 @@ visible in the same DM thread, without automatically waking the local agent. The
 records the specific answer returned through a waiting tool call. Employee replies do
 not automatically create a local agent turn.
 
+All three tools accept an optional `teammate`: the name or id of one of the employee's
+Jerrai teammates or ARM persistent agents. `ask_employee` then starts the thread in that
+teammate's DM, and a follow-up naming a different teammate is refused. An unknown,
+ambiguous, or unavailable teammate starts nothing and returns the employee's teammate
+roster, which is how the local agent learns the names. `read_room` and
+`resume_employee` use it to select the latest thread with that teammate.
+
 The DM/thread index is saved atomically and privately under
 `$PASEO_HOME/employee-threads/<Genesis account key>.json`. It retains recipient and
 source identity, stable message IDs, delivery state, and thread-to-room references. The

@@ -39,6 +39,14 @@ function requireThread(document: ThreadDocument, id: string, scope?: Scope) {
     throw new Error("This thread is unavailable in the current account or local session.");
   return thread;
 }
+const isTeammate = (dm: EmployeeDm, ref: string) => {
+  const name = dm.name.toLowerCase(),
+    wanted = ref.trim().toLowerCase();
+  return (
+    Boolean(dm.target) &&
+    (dm.target!.id === ref || name === wanted || name.endsWith(` / ${wanted}`))
+  );
+};
 function requireDm(document: ThreadDocument, id: string) {
   const dm = document.dms.find((candidate) => candidate.id === id);
   if (!dm) throw new Error("Choose a DM in the current account.");
@@ -149,6 +157,33 @@ export class ThreadService {
       document.dms.push(dm);
       return dm;
     });
+  }
+  /** Resolves a teammate by id or name. A miss lists the roster, the only way a local agent learns the names. */
+  private async teammate(
+    employee: { ai_employee_id: string; name: string },
+    ref: string,
+  ): Promise<Target> {
+    const targets = (await this.tasks.targets(employee.ai_employee_id)).targets;
+    const byId = targets.filter((t) => t.id === ref);
+    const matches = byId.length
+      ? byId
+      : targets.filter((t) => t.name.toLowerCase() === ref.trim().toLowerCase());
+    const [match] = matches;
+    if (matches.length === 1 && match!.available) return { kind: match!.kind, id: match!.id };
+    const roster = targets.length
+      ? ` Its teammates: ${targets
+          .map(
+            (t) =>
+              `${t.name} (${t.kind === "arm" ? "persistent agent" : "teammate"}, ${t.available ? t.status : "unavailable"}, id ${t.id})`,
+          )
+          .join("; ")}.`
+      : " It has no teammates.";
+    if (matches.length === 1) throw new Error(`${match!.name} is unavailable.${roster}`);
+    if (matches.length > 1)
+      throw new Error(
+        `${employee.name} has more than one teammate named ${ref}; pass its id.${roster}`,
+      );
+    throw new Error(`${employee.name} has no teammate named ${ref}.${roster}`);
   }
   private async importHistory(account: Account) {
     if (account.imported) return;
@@ -395,7 +430,7 @@ export class ThreadService {
     if (!thread.followup || thread.followup.phase === "sent") return thread;
     return this.send(id, thread.followup.text, thread.followup.id);
   }
-  private async ownThread(employee: string, scope: Scope, id?: string) {
+  private async ownThread(employee: string, scope: Scope, id?: string, teammate?: string) {
     this.sessionSignal(scope).throwIfAborted();
     const account = await this.account(),
       document = await account.store.read();
@@ -412,11 +447,14 @@ export class ThreadService {
       .find(
         (t) =>
           sameScope(t.origin, scope) &&
-          requireDm(document, t.dmId).employee === match?.ai_employee_id,
+          requireDm(document, t.dmId).employee === match?.ai_employee_id &&
+          (teammate
+            ? isTeammate(requireDm(document, t.dmId), teammate)
+            : !requireDm(document, t.dmId).target),
       );
   }
-  async read(employee: string, scope: Scope, limit: number, id?: string) {
-    const thread = await this.ownThread(employee, scope, id);
+  async read(employee: string, scope: Scope, limit: number, id?: string, teammate?: string) {
+    const thread = await this.ownThread(employee, scope, id, teammate);
     if (!thread)
       return "No thread with that employee started by this local session yet. Use ask_employee to start one.";
     const detail = await this.detail(thread.id, scope);
@@ -429,8 +467,8 @@ export class ThreadService {
         .join("\n\n")
     );
   }
-  async resume(employee: string, scope: Scope, id?: string) {
-    const thread = await this.ownThread(employee, scope, id);
+  async resume(employee: string, scope: Scope, id?: string, teammate?: string) {
+    const thread = await this.ownThread(employee, scope, id, teammate);
     if (!thread?.room) throw new Error("Choose a thread started by this local session.");
     const account = await this.account(),
       rooms = await this.rooms(account, thread);
@@ -438,35 +476,49 @@ export class ThreadService {
     await rooms.resume(thread.room);
     return `Thread ${thread.id} resumed. No message was sent.`;
   }
+  private async employeeNamed(employee: string) {
+    return (await this.tasks.employees()).employees.find(
+      (e) =>
+        e.ai_employee_id === employee ||
+        e.slug === employee ||
+        e.name.toLowerCase() === employee.toLowerCase(),
+    );
+  }
+  private async continuable(employee: string, origin: Scope, id: string, teammate?: string) {
+    const thread = (await this.ownThread(employee, origin, id))!;
+    const dm = requireDm(await (await this.account()).store.read(), thread.dmId);
+    if ((await this.employeeNamed(employee))?.ai_employee_id !== dm.employee)
+      throw new Error("Choose the employee who owns this thread.");
+    if (teammate && !isTeammate(dm, teammate))
+      throw new Error(`This thread is with ${dm.name}, not ${teammate}.`);
+    return thread;
+  }
+  private async dmFor(employee: string, teammate?: string) {
+    if (!teammate) return this.open(employee);
+    const match = await this.employeeNamed(employee);
+    if (!match) throw new Error("Choose an employee you can access.");
+    return this.open(employee, await this.teammate(match, teammate));
+  }
   async ask(
     employee: string,
     question: string,
     origin: ThreadOrigin,
     threadId?: string,
     request?: { id: string; signal: AbortSignal },
+    teammate?: string,
   ) {
     const sessionSignal = this.sessionSignal(origin);
     const signal = request ? AbortSignal.any([sessionSignal, request.signal]) : sessionSignal;
     const messageId = request?.id ?? `m_${randomBytes(8).toString("hex")}`;
     signal.throwIfAborted();
-    let thread: EmployeeThread;
-    if (threadId) {
-      thread = (await this.ownThread(employee, origin, threadId))!;
-      const account = await this.account(),
-        dm = requireDm(await account.store.read(), thread.dmId);
-      const candidate = (await this.tasks.employees()).employees.find(
-        (e) =>
-          e.ai_employee_id === employee ||
-          e.slug === employee ||
-          e.name.toLowerCase() === employee.toLowerCase(),
-      );
-      if (!candidate || candidate.ai_employee_id !== dm.employee)
-        throw new Error("Choose the employee who owns this thread.");
-      thread = await this.send(thread.id, question, messageId, origin);
-    } else {
-      const dm = await this.open(employee);
-      thread = await this.start(dm.id, question, messageId, origin);
-    }
+    const thread = threadId
+      ? await this.send(
+          (await this.continuable(employee, origin, threadId, teammate)).id,
+          question,
+          messageId,
+          origin,
+        )
+      : await this.start((await this.dmFor(employee, teammate)).id, question, messageId, origin);
     if (thread.error)
       return `Thread: ${thread.id}\n${thread.phase === "prepared" ? "Ask not sent" : "Delivery unconfirmed"}: ${thread.error}. Retry explicitly in AI Employees; this ask was not replayed.`;
     const requestId = threadId ? thread.followup!.id : thread.root.id,

@@ -54,6 +54,7 @@ async function fixture() {
       },
       targets: async () => [
         { kind: "jerrai", id: "stable-id", name: "Builder", status: "running", available: true },
+        { kind: "arm", id: "night", name: "Night shift", status: "stopped", available: false },
       ],
       open: async (_employee: string, target?: Target) => {
         opened.push({ scope, target });
@@ -387,6 +388,56 @@ describe("Employee DM threads", () => {
     expect(thread.returnedMessageId).toBe("answer");
     expect(thread.origin).toEqual(origin);
     expect(await f.threads.read("emp", origin, 20, thread.id)).toContain("Correct review");
+  });
+  it("asks a named teammate in its own DM and keeps follow-ups and reads with it", async () => {
+    const f = await threadsFixture();
+    const waiting = f.threads.ask(
+      "Jerry",
+      "Is the build green?",
+      origin,
+      undefined,
+      undefined,
+      "builder",
+    );
+    await vi.waitFor(() => expect(f.sent).toHaveLength(1));
+    expect(f.opened.map((o) => o.target)).toEqual([{ kind: "jerrai", id: "stable-id" }]);
+    const sent = f.sent[0]!;
+    f.states.get(sent.scope)!.conversations[0]!.messages.push({
+      id: "answer",
+      sender: "employee",
+      text: "Green.",
+      at: new Date().toISOString(),
+      update: false,
+      replyTo: sent.id,
+    });
+    expect(await waiting).toContain("Green.");
+    const state = await f.threads.state();
+    const thread = state.threads[0]!;
+    const dm = state.dms.find((d) => d.id === thread.dmId)!;
+    expect(dm).toMatchObject({ name: "Builder", target: { kind: "jerrai", id: "stable-id" } });
+    expect(dm.id).not.toBe(f.dm.id);
+    await expect(
+      f.threads.ask("Jerry", "Again?", origin, thread.id, undefined, "Night shift"),
+    ).rejects.toThrow("This thread is with Builder, not Night shift.");
+    expect(await f.threads.read("emp", origin, 20, undefined, "stable-id")).toContain("Green.");
+    expect(await f.threads.read("emp", origin, 20)).toContain("No thread");
+    expect(await f.threads.read("emp", origin, 20, undefined, "Night shift")).toContain(
+      "No thread",
+    );
+  });
+  it("opens nothing for an unknown or unavailable teammate and lists the roster instead", async () => {
+    const f = await threadsFixture();
+    const roster =
+      " Its teammates: Builder (teammate, running, id stable-id); Night shift (persistent agent, unavailable, id night).";
+    await expect(
+      f.threads.ask("emp", "Hello?", origin, undefined, undefined, "Planner"),
+    ).rejects.toThrow("Jerry has no teammate named Planner." + roster);
+    await expect(
+      f.threads.ask("emp", "Hello?", origin, undefined, undefined, "night shift"),
+    ).rejects.toThrow("Night shift is unavailable." + roster);
+    expect(f.opened).toEqual([]);
+    expect(f.sent).toEqual([]);
+    expect((await f.threads.state()).threads).toEqual([]);
   });
   it("preserves an old DM as one saved-history thread without splitting or resending", async () => {
     const f = await threadsFixture();
